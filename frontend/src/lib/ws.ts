@@ -1,14 +1,12 @@
 import type { WsInbound, WsOutbound } from './types';
-import { getToken } from './api';
 
 /**
- * Token-authenticated WebSocket client. Single shared connection for the
- * whole dashboard. Components subscribe to topics; the manager routes
- * incoming messages by topic and exposes typed handlers.
+ * Cookie-authenticated WebSocket client. Single shared connection.
  *
- * Reconnects with backoff when the socket drops. Re-subscribes to all
- * active topics on reconnect so component listeners don't need to know
- * the socket cycled.
+ *   - Browser sends the `afkbot_session` cookie automatically on the
+ *     upgrade request — no token in the URL (no leak into proxy logs).
+ *   - Reconnects with backoff when the socket drops.
+ *   - Re-subscribes to all active topics on reconnect.
  */
 
 type Handler = (msg: WsOutbound) => void;
@@ -17,6 +15,7 @@ class WsManager {
   private ws: WebSocket | null = null;
   private handlers = new Set<Handler>();
   private subscriptions = new Map<string, number>(); // topic → refcount
+  private wireSubscribed = new Set<string>(); // what we've actually told the server
   private reconnectTimer: number | null = null;
   private backoffMs = 1_000;
   private explicitlyClosed = false;
@@ -25,19 +24,21 @@ class WsManager {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
-    const token = getToken();
-    if (!token) return;
     this.explicitlyClosed = false;
 
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${window.location.host}/ws?token=${encodeURIComponent(token)}`;
+    // No `?token=...` — the HttpOnly session cookie travels on the upgrade
+    // automatically.
+    const url = `${proto}//${window.location.host}/ws`;
     this.ws = new WebSocket(url);
 
     this.ws.addEventListener('open', () => {
       this.backoffMs = 1_000;
       // Re-send all known subscriptions after reconnect.
+      this.wireSubscribed.clear();
       for (const topic of this.subscriptions.keys()) {
         this.sendRaw({ type: 'subscribe', topic });
+        this.wireSubscribed.add(topic);
       }
     });
 
@@ -58,6 +59,7 @@ class WsManager {
 
     this.ws.addEventListener('close', () => {
       this.ws = null;
+      this.wireSubscribed.clear();
       if (this.explicitlyClosed) return;
       this.scheduleReconnect();
     });
@@ -75,6 +77,7 @@ class WsManager {
     }
     this.ws?.close();
     this.ws = null;
+    this.wireSubscribed.clear();
   }
 
   private scheduleReconnect(): void {
@@ -93,20 +96,42 @@ class WsManager {
     }
   }
 
+  /**
+   * Reconcile our recorded intent against what's actually on the wire.
+   * Called after every refcount change so the server view eventually
+   * matches the client view regardless of socket state at the moment of
+   * subscribe/unsubscribe.
+   */
+  private reconcile(): void {
+    const desired = new Set(this.subscriptions.keys());
+    // Add anything desired but not yet subscribed.
+    for (const topic of desired) {
+      if (!this.wireSubscribed.has(topic)) {
+        this.sendRaw({ type: 'subscribe', topic });
+        this.wireSubscribed.add(topic);
+      }
+    }
+    // Drop anything subscribed but no longer desired.
+    for (const topic of this.wireSubscribed) {
+      if (!desired.has(topic)) {
+        this.sendRaw({ type: 'unsubscribe', topic });
+        this.wireSubscribed.delete(topic);
+      }
+    }
+  }
+
   subscribe(topic: string): () => void {
     const count = this.subscriptions.get(topic) ?? 0;
     this.subscriptions.set(topic, count + 1);
-    if (count === 0) {
-      this.sendRaw({ type: 'subscribe', topic });
-    }
+    this.reconcile();
     return () => {
       const n = this.subscriptions.get(topic) ?? 0;
       if (n <= 1) {
         this.subscriptions.delete(topic);
-        this.sendRaw({ type: 'unsubscribe', topic });
       } else {
         this.subscriptions.set(topic, n - 1);
       }
+      this.reconcile();
     };
   }
 

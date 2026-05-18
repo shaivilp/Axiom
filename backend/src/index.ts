@@ -1,34 +1,48 @@
 import { createServer } from 'node:http';
+import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
-import { config } from './config.js';
+import { config, isProd } from './config.js';
 import { logger } from './logger.js';
 import { bearerAuth } from './middleware/auth.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
-import { apiLimiter, authLimiter } from './middleware/rate-limit.js';
+import {
+  apiLimiter,
+  authLimiter,
+  globalAuthLimiter,
+  healthLimiter,
+} from './middleware/rate-limit.js';
 import { closeDb, prisma } from './db/client.js';
 import { accountManager } from './minecraft/account-manager.js';
 import { accountsRouter } from './routes/accounts.js';
 import { authFlowRouter } from './routes/auth-flow.js';
+import { authSessionRouter } from './routes/auth-session.js';
 import { settingsRouter } from './routes/settings.js';
 import { attachWebSocket } from './routes/ws.js';
 
 const app = express();
 
 app.disable('x-powered-by');
-app.set('trust proxy', 1); // we expect nginx in front
+// Default to 'loopback' (per config.ts). With nginx on the same docker host
+// the real client IP is the localhost peer, so loopback is correct. Operators
+// can override TRUST_PROXY via env if they front this with a non-loopback
+// reverse proxy.
+app.set('trust proxy', config.TRUST_PROXY);
 
 app.use(helmet());
 app.use(
   cors({
     origin: config.ALLOWED_ORIGIN,
-    credentials: false,
+    // credentials: true is required for the SPA to send the session cookie
+    // cross-origin during local dev (Vite at :5173 → backend at :3000).
+    credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type'],
   }),
 );
+app.use(cookieParser());
 app.use(express.json({ limit: '64kb' }));
 app.use(
   pinoHttp({
@@ -40,16 +54,19 @@ app.use(
     },
     serializers: {
       req(req) {
-        return { method: req.method, url: req.url, remoteAddress: req.remoteAddress };
+        // Strip query string defensively — even though no production path
+        // puts tokens in URLs anymore, an old client could.
+        const url = typeof req.url === 'string' ? req.url.split('?')[0] : req.url;
+        return { method: req.method, url, remoteAddress: req.remoteAddress };
       },
     },
   }),
 );
 
 /**
- * Public: liveness probe. No auth, no rate limit — Docker healthcheck uses this.
+ * Public: liveness probe. Rate-limited so it can't be used to drive DB load.
  */
-app.get('/healthz', async (_req: Request, res: Response) => {
+app.get('/healthz', healthLimiter, async (_req: Request, res: Response) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
     res.json({ status: 'ok', db: 'ok' });
@@ -60,9 +77,17 @@ app.get('/healthz', async (_req: Request, res: Response) => {
 });
 
 /**
- * All /api/* routes go through general rate-limiting first, then the bearer
- * token check. authLimiter is applied to endpoints that may fail auth so
- * brute-force is bounded.
+ * /auth/login and /auth/logout — public (login is the auth gate itself).
+ * Aggressively rate-limited per-IP plus a global cap.
+ */
+const authPublic = express.Router();
+authPublic.use(globalAuthLimiter);
+authPublic.use(authLimiter);
+authPublic.use(authSessionRouter);
+app.use('/api/v1/auth', authPublic);
+
+/**
+ * All other /api/v1/* routes require auth.
  */
 const api = express.Router();
 api.use(apiLimiter);
@@ -94,7 +119,6 @@ const server = createServer(app);
 attachWebSocket(server);
 
 async function bootstrap(): Promise<void> {
-  // Bring the prisma client online before we start hydrating accounts.
   await prisma.$connect().catch((err: unknown) => {
     logger.error({ err }, 'prisma: connect failed — continuing, requests will fail until db is up');
   });
@@ -116,9 +140,11 @@ async function bootstrap(): Promise<void> {
 
 void bootstrap();
 
-async function shutdown(signal: string): Promise<void> {
+let shuttingDown = false;
+async function shutdown(signal: string, exitCode = 0): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   logger.info({ signal }, 'shutdown: received signal');
-  // Stop all bots first so MC sockets are torn down cleanly.
   await accountManager.stop().catch((err) => {
     logger.error({ err }, 'shutdown: account manager stop threw');
   });
@@ -131,14 +157,20 @@ async function shutdown(signal: string): Promise<void> {
   } catch (err) {
     logger.error({ err }, 'shutdown: error disconnecting prisma');
   }
-  setTimeout(() => process.exit(0), 500).unref();
+  setTimeout(() => process.exit(exitCode), 500).unref();
 }
 
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
+
+// Production policy: crash fast on unhandled failure so the container
+// manager (docker / k8s) restarts us into a clean state. Continuing in a
+// half-broken state hides bugs.
 process.on('unhandledRejection', (reason) => {
   logger.error({ reason }, 'unhandled promise rejection');
+  if (isProd) void shutdown('unhandledRejection', 1);
 });
 process.on('uncaughtException', (err) => {
   logger.error({ err }, 'uncaught exception');
+  if (isProd) void shutdown('uncaughtException', 1);
 });

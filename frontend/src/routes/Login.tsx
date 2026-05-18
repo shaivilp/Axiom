@@ -6,22 +6,23 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/store/auth';
-import { api, ApiClientError, setToken } from '@/lib/api';
+import { ApiClientError } from '@/lib/api';
 
 export function Login() {
   const [token, setLocalToken] = useState('');
   const [busy, setBusy] = useState(false);
-  const setAuthToken = useAuth((s) => s.setAuthToken);
+  const login = useAuth((s) => s.login);
   const navigate = useNavigate();
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token.trim()) return;
+    const trimmed = token.trim();
+    if (!trimmed) return;
     setBusy(true);
-    setToken(token.trim()); // temporarily set so api.ping picks it up
     try {
-      await api.ping();
-      setAuthToken(token.trim());
+      // login() POSTs the token to /auth/login, which validates and sets
+      // an HttpOnly cookie. Nothing is persisted client-side.
+      await login(trimmed);
       navigate('/', { replace: true });
     } catch (err) {
       const msg = err instanceof ApiClientError ? err.message : 'Could not verify token';
@@ -54,6 +55,7 @@ export function Login() {
                 onChange={(e) => setLocalToken(e.target.value)}
                 className="pl-9"
                 autoFocus
+                autoComplete="current-password"
               />
             </div>
             <Button type="submit" className="w-full" disabled={busy || !token}>

@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/status-pill';
 import { api, ApiClientError } from '@/lib/api';
-import { formatRelative, formatUptime } from '@/lib/utils';
+import { formatRelative, formatUptime, useNow } from '@/lib/utils';
 import type { AccountSummary } from '@/lib/types';
 
 interface Props {
@@ -13,6 +13,7 @@ interface Props {
 }
 
 export function AccountCard({ account }: Props) {
+  const now = useNow(30_000);
   const isRunning = account.desiredState === 'running';
   const canStart = !isRunning || account.state === 'failed';
   const canStop = isRunning && account.state !== 'idle';
@@ -57,7 +58,7 @@ export function AccountCard({ account }: Props) {
           <span>Reconnects</span>
           <span className="text-foreground text-right">{account.reconnectAttempt}</span>
           <span>Last seen</span>
-          <span className="text-foreground text-right">{formatRelative(account.lastConnectedAt)}</span>
+          <span className="text-foreground text-right">{formatRelative(account.lastConnectedAt, now)}</span>
         </div>
 
         {account.lastError && (

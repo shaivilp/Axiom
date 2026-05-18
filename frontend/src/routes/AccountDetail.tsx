@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Save, Send } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,8 +13,20 @@ import { BehaviorConfigForm } from '@/components/behavior-config-form';
 import { useAccounts } from '@/store/accounts';
 import { api, ApiClientError } from '@/lib/api';
 import { wsManager } from '@/lib/ws';
-import { formatRelative, formatTime, formatUptime } from '@/lib/utils';
-import type { BehaviorConfig } from '@/lib/types';
+import { formatRelative, formatTime, formatUptime, useNow } from '@/lib/utils';
+import type { AccountSummary, BehaviorConfig } from '@/lib/types';
+import { defaultBehaviorConfig } from '@/lib/behaviors';
+
+interface ConnectionForm {
+  label: string;
+  host: string;
+  port: number;
+  version: string;
+}
+
+function toConnectionForm(a: AccountSummary): ConnectionForm {
+  return { label: a.label, host: a.serverHost, port: a.serverPort, version: a.version };
+}
 
 export function AccountDetail() {
   const { id } = useParams<{ id: string }>();
@@ -22,38 +34,48 @@ export function AccountDetail() {
   const chatLog = useAccounts((s) => (id ? s.chatLogs[id] : null)) ?? [];
   const eventLog = useAccounts((s) => (id ? s.eventLogs[id] : null)) ?? [];
   const subscribeAccount = useAccounts((s) => s.subscribeAccount);
-  const [chatInput, setChatInput] = useState('');
+  const now = useNow(30_000);
 
-  // Server connection form
-  const [host, setHost] = useState('');
-  const [port, setPort] = useState(25565);
-  const [version, setVersion] = useState('1.8.9');
-  const [label, setLabel] = useState('');
+  const [chatInput, setChatInput] = useState('');
+  const [form, setForm] = useState<ConnectionForm | null>(null);
   const [behaviors, setBehaviors] = useState<BehaviorConfig | null>(null);
+  const formDirty = useRef(false);
+  const behaviorsDirty = useRef(false);
 
   useEffect(() => {
     if (!id) return;
-    void api.getAccount(id);
     const unsub = subscribeAccount(id);
     return unsub;
   }, [id, subscribeAccount]);
 
+  // Initialize form fields from the account once it shows up in the store.
+  // Subsequent remote updates ONLY overwrite the form if the user hasn't
+  // started editing — otherwise we'd silently nuke their typed changes.
+  // H11 fix from the security review.
   useEffect(() => {
-    if (account) {
-      setHost(account.serverHost);
-      setPort(account.serverPort);
-      setVersion(account.version);
-      setLabel(account.label);
+    if (!account) return;
+    if (form === null) {
+      setForm(toConnectionForm(account));
+    } else if (!formDirty.current) {
+      setForm(toConnectionForm(account));
     }
-  }, [account?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (behaviors === null) {
+      setBehaviors(parseBehaviorsFromRow(account) ?? defaultBehaviorConfig);
+    }
+  }, [account, form, behaviors]);
 
-  if (!account) {
+  if (!account || !form) {
     return (
       <div className="container py-8">
         <p className="text-muted-foreground text-sm">Loading account…</p>
       </div>
     );
   }
+
+  const updateForm = (patch: Partial<ConnectionForm>) => {
+    formDirty.current = true;
+    setForm((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
 
   const onSendChat = () => {
     if (!chatInput.trim() || !id) return;
@@ -64,12 +86,13 @@ export function AccountDetail() {
   const onSaveConnection = async () => {
     try {
       await api.updateAccount(account.id, {
-        label,
-        serverHost: host,
-        serverPort: port,
-        version,
+        label: form.label,
+        serverHost: form.host,
+        serverPort: form.port,
+        version: form.version,
       });
       toast.success('Connection settings saved');
+      formDirty.current = false;
     } catch (err) {
       const msg = err instanceof ApiClientError ? err.message : 'save failed';
       toast.error('Save failed', { description: msg });
@@ -81,11 +104,19 @@ export function AccountDetail() {
     try {
       await api.updateAccount(account.id, { behaviors });
       toast.success('Behaviors saved');
+      behaviorsDirty.current = false;
     } catch (err) {
       const msg = err instanceof ApiClientError ? err.message : 'save failed';
       toast.error('Save failed', { description: msg });
     }
   };
+
+  const remoteEditsPending = formDirty.current && account
+    ? (account.label !== form.label ||
+       account.serverHost !== form.host ||
+       account.serverPort !== form.port ||
+       account.version !== form.version)
+    : false;
 
   return (
     <div className="bg-background min-h-screen">
@@ -159,7 +190,7 @@ export function AccountDetail() {
                   <span>Reconnects</span>
                   <span className="text-foreground text-right">{account.reconnectAttempt}</span>
                   <span>Last seen</span>
-                  <span className="text-foreground text-right">{formatRelative(account.lastConnectedAt)}</span>
+                  <span className="text-foreground text-right">{formatRelative(account.lastConnectedAt, now)}</span>
                 </div>
                 {account.lastError && (
                   <p className="text-destructive mt-3 break-words text-xs">⚠ {account.lastError}</p>
@@ -177,31 +208,49 @@ export function AccountDetail() {
               <TabsContent value="connection" className="mt-3">
                 <Card>
                   <CardContent className="space-y-3 pt-4">
+                    {remoteEditsPending && (
+                      <p className="text-warning text-xs">
+                        ⚠ This account has unsaved local changes; remote updates aren't shown until you save or reset.
+                      </p>
+                    )}
                     <div>
                       <Label className="text-xs">Label</Label>
-                      <Input value={label} onChange={(e) => setLabel(e.target.value)} />
+                      <Input value={form.label} onChange={(e) => updateForm({ label: e.target.value })} />
                     </div>
                     <div>
                       <Label className="text-xs">Host</Label>
-                      <Input value={host} onChange={(e) => setHost(e.target.value)} />
+                      <Input value={form.host} onChange={(e) => updateForm({ host: e.target.value })} />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <Label className="text-xs">Port</Label>
                         <Input
                           type="number"
-                          value={port}
-                          onChange={(e) => setPort(Number(e.target.value))}
+                          value={form.port}
+                          onChange={(e) => updateForm({ port: Number(e.target.value) })}
                         />
                       </div>
                       <div>
                         <Label className="text-xs">Version</Label>
-                        <Input value={version} onChange={(e) => setVersion(e.target.value)} />
+                        <Input value={form.version} onChange={(e) => updateForm({ version: e.target.value })} />
                       </div>
                     </div>
                     <Button onClick={onSaveConnection} className="w-full" size="sm">
                       <Save className="size-3.5" /> Save
                     </Button>
+                    {formDirty.current && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => {
+                          formDirty.current = false;
+                          setForm(toConnectionForm(account));
+                        }}
+                      >
+                        Reset to remote
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -210,8 +259,11 @@ export function AccountDetail() {
                 <Card>
                   <CardContent className="space-y-4 pt-4">
                     <BehaviorConfigForm
-                      value={(behaviors ?? defaultBehaviors) as BehaviorConfig}
-                      onChange={setBehaviors}
+                      value={behaviors ?? defaultBehaviorConfig}
+                      onChange={(next) => {
+                        behaviorsDirty.current = true;
+                        setBehaviors(next);
+                      }}
                     />
                     <Button onClick={onSaveBehaviors} size="sm" className="w-full">
                       <Save className="size-3.5" /> Save behaviors
@@ -247,8 +299,11 @@ export function AccountDetail() {
   );
 }
 
-const defaultBehaviors: BehaviorConfig = {
-  wiggle: { enabled: true, intervalMs: 30_000, jitterPct: 0.2 },
-  chatPing: { enabled: false, intervalMs: 60_000, messages: ['Still here.'] },
-  loginCommands: [],
-};
+function parseBehaviorsFromRow(_a: AccountSummary): BehaviorConfig | null {
+  // AccountSummary doesn't carry behaviors today — they're saved through
+  // updateAccount, then re-fetched if the form needs them. For now, return
+  // null so the form falls back to defaultBehaviorConfig until the user
+  // explicitly fetches them. Wiring behaviors into the summary payload is
+  // a separate enhancement.
+  return null;
+}

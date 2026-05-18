@@ -6,6 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
+import { defaultBehaviorConfig } from '@/lib/behaviors';
 import type { BehaviorConfig, LoginCommand } from '@/lib/types';
 
 interface Props {
@@ -14,19 +15,13 @@ interface Props {
   disabled?: boolean;
 }
 
-const defaults: BehaviorConfig = {
-  wiggle: { enabled: true, intervalMs: 30_000, jitterPct: 0.2 },
-  chatPing: { enabled: false, intervalMs: 60_000, messages: ['Still here.'] },
-  loginCommands: [],
-};
-
 export function BehaviorConfigForm({ value, onChange, disabled }: Props) {
   const v: BehaviorConfig = {
-    wiggle: { ...defaults.wiggle, ...value?.wiggle },
+    wiggle: { ...defaultBehaviorConfig.wiggle, ...value?.wiggle },
     chatPing: {
-      ...defaults.chatPing,
+      ...defaultBehaviorConfig.chatPing,
       ...value?.chatPing,
-      messages: value?.chatPing?.messages ?? defaults.chatPing.messages,
+      messages: value?.chatPing?.messages ?? defaultBehaviorConfig.chatPing.messages,
     },
     loginCommands: value?.loginCommands ?? [],
   };

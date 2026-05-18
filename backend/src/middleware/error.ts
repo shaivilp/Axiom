@@ -10,6 +10,18 @@ export function notFoundHandler(_req: Request, res: Response): void {
   res.status(404).json(body);
 }
 
+/**
+ * Zod issue → response detail. Strips the `received` field (echoes raw user
+ * input back, useful for crafting attacks against a token-leaked deployment).
+ */
+function sanitizeZodIssues(err: ZodError): Array<{ path: string; code: string; message: string }> {
+  return err.issues.map((i) => ({
+    path: i.path.join('.'),
+    code: i.code,
+    message: i.message,
+  }));
+}
+
 export function errorHandler(
   err: unknown,
   req: Request,
@@ -30,7 +42,7 @@ export function errorHandler(
       error: {
         code: ErrorCodes.VALIDATION_ERROR,
         message: 'Request validation failed',
-        details: err.issues,
+        details: sanitizeZodIssues(err),
       },
     };
     res.status(400).json(body);

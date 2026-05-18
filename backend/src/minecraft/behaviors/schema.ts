@@ -49,7 +49,9 @@ export const behaviorConfigSchema = z
   .object({
     wiggle: wiggleConfigSchema.default({}),
     chatPing: chatPingConfigSchema.default({}),
-    loginCommands: z.array(loginCommandSchema).default([]),
+    // Hard cap on the array length keeps a malicious or buggy client from
+    // bloating the `behaviors` JSONB column unboundedly.
+    loginCommands: z.array(loginCommandSchema).max(50).default([]),
   })
   .default({});
 

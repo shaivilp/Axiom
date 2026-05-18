@@ -9,20 +9,15 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { BehaviorConfigForm } from '@/components/behavior-config-form';
 import { api, ApiClientError } from '@/lib/api';
+import { defaultBehaviorConfig } from '@/lib/behaviors';
 import type { BehaviorConfig, SettingsRow } from '@/lib/types';
-
-const defaultBehaviors: BehaviorConfig = {
-  wiggle: { enabled: true, intervalMs: 30_000, jitterPct: 0.2 },
-  chatPing: { enabled: false, intervalMs: 60_000, messages: ['Still here.'] },
-  loginCommands: [],
-};
 
 export function Settings() {
   const [row, setRow] = useState<SettingsRow | null>(null);
   const [host, setHost] = useState('');
   const [port, setPort] = useState(25565);
   const [version, setVersion] = useState('1.8.9');
-  const [behaviors, setBehaviors] = useState<BehaviorConfig>(defaultBehaviors);
+  const [behaviors, setBehaviors] = useState<BehaviorConfig>(defaultBehaviorConfig);
 
   useEffect(() => {
     void api.getSettings().then(({ settings }) => {

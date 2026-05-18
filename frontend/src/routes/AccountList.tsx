@@ -26,6 +26,10 @@ export function AccountList() {
     return unsub;
   }, [loadAll, subscribeAll]);
 
+  const onLogout = () => {
+    void logout();
+  };
+
   const accounts = useMemo(
     () => Object.values(accountsMap).sort((a, b) => a.ordinal - b.ordinal),
     [accountsMap],
@@ -44,7 +48,7 @@ export function AccountList() {
               <Link to="/settings"><SettingsIcon className="size-4" /></Link>
             </Button>
             <ThemeToggle />
-            <Button variant="ghost" size="icon" onClick={logout} aria-label="Sign out">
+            <Button variant="ghost" size="icon" onClick={onLogout} aria-label="Sign out">
               <LogOut className="size-4" />
             </Button>
           </div>

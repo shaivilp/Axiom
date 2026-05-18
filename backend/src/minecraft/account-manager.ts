@@ -3,8 +3,8 @@ import type { Account } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { logger } from '../logger.js';
 import { AppError, ErrorCodes } from '../types.js';
-import { deleteAuthCache } from './auth.js';
-import { BotInstance } from './bot-instance.js';
+import { deleteAuthCache, hasPersistedTokens } from './auth.js';
+import { BotInstance, type BotMetadata } from './bot-instance.js';
 import type { AccountSummary, BotLifecycleEvent, ChatEvent } from './events.js';
 
 /**
@@ -32,13 +32,30 @@ export declare interface AccountManager {
   ): boolean;
 }
 
+function rowToMeta(row: Account): BotMetadata {
+  return {
+    id: row.id,
+    ordinal: row.ordinal,
+    label: row.label,
+    username: row.username,
+    authType: row.authType,
+    serverHost: row.serverHost,
+    serverPort: row.serverPort,
+    version: row.version,
+    autoConnect: row.autoConnect,
+    desiredState: row.desiredState,
+  };
+}
+
 export class AccountManager extends EventEmitter {
   private bots = new Map<string, BotInstance>();
   private started = false;
 
   /**
    * Hydrate from the DB on boot. Each account with `desiredState=running`
-   * AND `autoConnect=true` is started immediately, in parallel.
+   * AND `autoConnect=true` is started immediately, in parallel. Microsoft
+   * accounts without a persisted token row are deliberately NOT started —
+   * starting one would infinite-loop on a stale device-code prompt.
    */
   async start(): Promise<void> {
     if (this.started) return;
@@ -49,9 +66,20 @@ export class AccountManager extends EventEmitter {
 
     for (const row of rows) {
       this.spawnBot(row);
-      if (row.desiredState === 'running' && row.autoConnect) {
-        this.bots.get(row.id)?.start();
+      if (row.desiredState !== 'running' || !row.autoConnect) continue;
+
+      if (row.authType === 'microsoft') {
+        const hasTokens = await hasPersistedTokens(row.id).catch(() => false);
+        if (!hasTokens) {
+          logger.warn(
+            { accountId: row.id },
+            'hydrate: MS account has no persisted tokens — skipping auto-start (user must complete device-code auth)',
+          );
+          continue;
+        }
       }
+
+      this.bots.get(row.id)?.start();
     }
   }
 
@@ -76,25 +104,19 @@ export class AccountManager extends EventEmitter {
     return bot ? this.summarize(bot) : null;
   }
 
-  private summarize(bot: BotInstance, row?: Account): AccountSummary {
-    const cached = (bot as unknown as { __row?: Account }).__row;
-    const accountRow = row ?? cached;
-    if (!accountRow) {
-      // Should never happen — every bot is created from a row and the row
-      // is cached on the BotInstance via `attachRow`.
-      throw new Error(`Missing account row for bot ${bot.id}`);
-    }
+  private summarize(bot: BotInstance): AccountSummary {
+    const meta = bot.getMeta();
     return {
-      id: accountRow.id,
-      ordinal: accountRow.ordinal,
-      label: accountRow.label,
-      username: accountRow.username,
-      authType: accountRow.authType,
-      serverHost: accountRow.serverHost,
-      serverPort: accountRow.serverPort,
-      version: accountRow.version,
-      autoConnect: accountRow.autoConnect,
-      desiredState: accountRow.desiredState,
+      id: meta.id,
+      ordinal: meta.ordinal,
+      label: meta.label,
+      username: meta.username,
+      authType: meta.authType,
+      serverHost: meta.serverHost,
+      serverPort: meta.serverPort,
+      version: meta.version,
+      autoConnect: meta.autoConnect,
+      desiredState: meta.desiredState,
       state: bot.getState(),
       lastError: bot.getLastError(),
       lastConnectedAt: bot.getLastConnectedAt()?.toISOString() ?? null,
@@ -103,33 +125,17 @@ export class AccountManager extends EventEmitter {
     };
   }
 
-  private attachRow(bot: BotInstance, row: Account): void {
-    // Stash the row on the bot so summarize() can find it without an extra
-    // DB call on every state change. Refreshed on any DB mutation.
-    (bot as unknown as { __row: Account }).__row = row;
-  }
-
   private spawnBot(row: Account): BotInstance {
     const bot = new BotInstance({
-      id: row.id,
-      ordinal: row.ordinal,
-      label: row.label,
-      username: row.username,
-      authType: row.authType,
-      serverHost: row.serverHost,
-      serverPort: row.serverPort,
-      version: row.version,
+      meta: rowToMeta(row),
       behaviors: row.behaviors,
     });
-    this.attachRow(bot, row);
 
     bot.on('state', () => {
-      const summary = this.getSummary(row.id);
-      if (summary) {
-        this.persistState(row.id, summary.state, bot.getLastError(), bot.getLastConnectedAt())
-          .catch((err) => logger.warn({ err, accountId: row.id }, 'persist state failed'));
-        this.emit('account-changed', summary);
-      }
+      const summary = this.summarize(bot);
+      this.persistState(row.id, summary.state, bot.getLastError(), bot.getLastConnectedAt())
+        .catch((err) => logger.warn({ err, accountId: row.id }, 'persist state failed'));
+      this.emit('account-changed', summary);
     });
     bot.on('chat', (chat) => this.emit('chat', row.id, chat));
     bot.on('lifecycle', (ev) => this.emit('lifecycle', row.id, ev));
@@ -169,6 +175,17 @@ export class AccountManager extends EventEmitter {
     autoConnect: boolean;
     behaviors: unknown;
   }): Promise<AccountSummary> {
+    // MS accounts cannot run until device-code auth completes. Persisting
+    // `desiredState='running'` would, on the next process restart, try to
+    // start a tokenless bot and infinite-loop on auth-needed. Force-stopped
+    // until /auth/complete flips it.
+    const initialDesired: 'running' | 'stopped' =
+      input.authType === 'microsoft'
+        ? 'stopped'
+        : input.autoConnect
+          ? 'running'
+          : 'stopped';
+
     const row = await prisma.account.create({
       data: {
         label: input.label,
@@ -179,14 +196,13 @@ export class AccountManager extends EventEmitter {
         version: input.version,
         autoConnect: input.autoConnect,
         behaviors: input.behaviors as never,
-        desiredState: input.autoConnect ? 'running' : 'stopped',
+        desiredState: initialDesired,
       },
     });
     const bot = this.spawnBot(row);
     if (input.authType === 'offline' && input.autoConnect) {
       bot.start();
     }
-    // For MS, the user must complete device-code auth before start() works.
     const summary = this.summarize(bot);
     this.emit('account-changed', summary);
     return summary;
@@ -218,11 +234,11 @@ export class AccountManager extends EventEmitter {
     if (!bot) {
       throw new AppError(ErrorCodes.ACCOUNT_NOT_FOUND, 'Account not found in manager', 404);
     }
-    this.attachRow(bot, row);
+    bot.updateMeta(rowToMeta(row));
     if (patch.behaviors !== undefined) {
       bot.updateBehaviors(row.behaviors);
     }
-    const summary = this.summarize(bot, row);
+    const summary = this.summarize(bot);
     this.emit('account-changed', summary);
     return summary;
   }
@@ -234,9 +250,9 @@ export class AccountManager extends EventEmitter {
       where: { id },
       data: { desiredState: 'running' },
     });
-    this.attachRow(bot, row);
+    bot.updateMeta(rowToMeta(row));
     bot.start();
-    return this.summarize(bot, row);
+    return this.summarize(bot);
   }
 
   async stopAccount(id: string): Promise<AccountSummary> {
@@ -246,21 +262,60 @@ export class AccountManager extends EventEmitter {
       where: { id },
       data: { desiredState: 'stopped' },
     });
-    this.attachRow(bot, row);
+    bot.updateMeta(rowToMeta(row));
     await bot.stop();
-    return this.summarize(bot, row);
+    return this.summarize(bot);
   }
 
+  /**
+   * Stop the bot, then transactionally delete tokens + the account row.
+   * Disk cache is wiped last, after the DB is consistent. Any cleanup
+   * failure is logged at error level (no silent .catch swallowing).
+   */
   async deleteAccount(id: string): Promise<void> {
     const bot = this.bots.get(id);
-    if (bot) await bot.stop();
+    if (bot) {
+      await bot.stop().catch((err) => {
+        logger.warn({ err, id }, 'delete-account: stop threw, continuing');
+      });
+    }
     this.bots.delete(id);
-    await prisma.account.delete({ where: { id } }).catch((err) => {
-      logger.warn({ err, id }, 'delete-account: db delete failed (may already be gone)');
-    });
-    // Drop any cached MS tokens / disk cache so the auth slate is clean.
-    await deleteAuthCache(id).catch(() => undefined);
+
+    try {
+      await prisma.$transaction([
+        prisma.accountToken.deleteMany({ where: { accountId: id } }),
+        prisma.account.delete({ where: { id } }),
+      ]);
+    } catch (err) {
+      logger.error({ err, id }, 'delete-account: db transaction failed');
+      throw new AppError(ErrorCodes.INTERNAL_ERROR, 'Failed to delete account', 500);
+    }
+
+    try {
+      await deleteAuthCache(id);
+    } catch (err) {
+      // Disk cleanup failing after a successful DB delete leaves orphaned
+      // ciphertext on disk. Surface, don't swallow.
+      logger.error({ err, id }, 'delete-account: disk cache cleanup failed (orphaned files)');
+    }
+
     this.emit('account-removed', id);
+  }
+
+  /**
+   * Mark an MS account as user-controlled (desiredState='running') after
+   * device-code auth completes. Called by /auth/complete.
+   */
+  async markAccountRunning(id: string): Promise<AccountSummary> {
+    const bot = this.bots.get(id);
+    if (!bot) throw new AppError(ErrorCodes.ACCOUNT_NOT_FOUND, 'Account not found', 404);
+    const row = await prisma.account.update({
+      where: { id },
+      data: { desiredState: 'running' },
+    });
+    bot.updateMeta(rowToMeta(row));
+    bot.start();
+    return this.summarize(bot);
   }
 
   sendChat(id: string, text: string): void {
@@ -274,7 +329,3 @@ export class AccountManager extends EventEmitter {
 }
 
 export const accountManager = new AccountManager();
-
-// Silence the "MaxListenersExceededWarning" — one listener per connected
-// WS client on a busy multi-account dashboard is normal.
-accountManager.setMaxListeners(0);

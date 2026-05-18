@@ -77,7 +77,10 @@ router.post('/:id/auth/complete', async (req: Request, res: Response, next: Next
       });
     }
     clearFlowState(id);
-    const summary = await accountManager.startAccount(id);
+    // markAccountRunning sets desiredState='running' AND starts the bot.
+    // For MS accounts this is what flips them off the "stopped until
+    // device-code complete" hold set at creation time.
+    const summary = await accountManager.markAccountRunning(id);
     res.json({ account: summary });
   } catch (err) {
     next(err);

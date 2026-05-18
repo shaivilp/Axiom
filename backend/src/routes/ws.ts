@@ -3,7 +3,7 @@ import { URL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 import { logger } from '../logger.js';
-import { verifyToken } from '../middleware/auth.js';
+import { verifyUpgradeAuth } from '../middleware/auth.js';
 import { accountManager } from '../minecraft/account-manager.js';
 import type {
   AccountSummary,
@@ -14,15 +14,18 @@ import type {
 } from '../minecraft/events.js';
 
 /**
- * WebSocket layer. Single endpoint `/ws?token=<bearer>` with topic-based
- * pub/sub:
+ * WebSocket layer. Single endpoint `/ws` with topic-based pub/sub:
  *
  *   subscribe topic "accounts"        — receive AccountSummary on every change
  *   subscribe topic "account:<uuid>"  — receive chat + lifecycle for that bot
  *
- * Auth is checked on the HTTP upgrade so unauthenticated sockets never
- * even reach `connection`. The same dashboard token (bearer in REST, query
- * string here) protects both surfaces.
+ * Auth is checked on the HTTP upgrade via the same cookie used for REST
+ * (or `Authorization: Bearer` for non-browser clients) so unauthenticated
+ * sockets never reach `connection`. The legacy `?token=` query parameter
+ * is intentionally rejected — it leaks the token into proxy access logs.
+ *
+ * Failed upgrades are rate-limited per-IP to bound brute force of the
+ * dashboard token via the upgrade endpoint.
  */
 
 const inboundSchema = z.discriminatedUnion('type', [
@@ -31,6 +34,7 @@ const inboundSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('chat'),
     accountId: z.string().uuid(),
+    // Strip CR/LF after the length check so a chat call can't stack commands.
     message: z.string().min(1).max(256),
   }),
 ]);
@@ -44,7 +48,42 @@ interface SocketState {
 
 const sockets = new WeakMap<WebSocket, SocketState>();
 
-function send(ws: WebSocket, msg: WsOutbound): void {
+// Simple per-IP failed-auth tracker for /ws upgrades. Resets every minute.
+const upgradeFailures = new Map<string, { count: number; firstAt: number }>();
+const UPGRADE_FAIL_WINDOW_MS = 60_000;
+const UPGRADE_FAIL_LIMIT = 20;
+
+function trackUpgradeFailure(ip: string): boolean {
+  const now = Date.now();
+  const rec = upgradeFailures.get(ip);
+  if (!rec || now - rec.firstAt > UPGRADE_FAIL_WINDOW_MS) {
+    upgradeFailures.set(ip, { count: 1, firstAt: now });
+    return true;
+  }
+  rec.count += 1;
+  return rec.count <= UPGRADE_FAIL_LIMIT;
+}
+
+// Lightweight broadcast helper: serialize once per message, fan out the
+// stringified payload to every interested socket.
+function broadcast(
+  clients: Set<WebSocket>,
+  msg: WsOutbound,
+  matches: (ws: WebSocket) => boolean,
+): void {
+  const payload = JSON.stringify(msg);
+  for (const ws of clients) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (!matches(ws)) continue;
+    try {
+      ws.send(payload);
+    } catch (err) {
+      logger.debug({ err }, 'ws: send failed');
+    }
+  }
+}
+
+function sendOne(ws: WebSocket, msg: WsOutbound): void {
   if (ws.readyState !== WebSocket.OPEN) return;
   try {
     ws.send(JSON.stringify(msg));
@@ -67,32 +106,37 @@ function isSubscribed(ws: WebSocket, topic: string): boolean {
 }
 
 export function attachWebSocket(server: HttpServer): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  // Cap WS frame size — default is 100 MiB, which is an authenticated DoS
+  // vector and absurd for our payloads (account summaries + chat lines).
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 65_536 });
 
-  // Auth at upgrade time. We piggyback on the HTTP server's `upgrade` event
-  // so unauthenticated requests never allocate a WebSocket.
   server.on('upgrade', (req: IncomingMessage, socket, head) => {
+    const ip = req.socket.remoteAddress ?? 'unknown';
     try {
       if (!req.url) {
         socket.destroy();
         return;
       }
-      // Only handle our /ws path; other upgrade requests fall through.
       const parsed = new URL(req.url, 'http://placeholder');
       if (parsed.pathname !== '/ws') {
         socket.destroy();
         return;
       }
-      const token = parsed.searchParams.get('token');
-      if (!verifyToken(token)) {
-        logger.warn(
-          { ip: req.socket.remoteAddress, path: parsed.pathname },
-          'ws: auth failed on upgrade',
-        );
+      if (!trackUpgradeFailure(ip)) {
+        logger.warn({ ip }, 'ws: upgrade rate-limited');
+        socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      if (!verifyUpgradeAuth(req.headers)) {
+        logger.warn({ ip, path: parsed.pathname }, 'ws: auth failed on upgrade');
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
         return;
       }
+      // Successful upgrade — reset this IP's failure budget so a legitimate
+      // user reconnecting frequently doesn't get throttled.
+      upgradeFailures.delete(ip);
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit('connection', ws, req);
       });
@@ -113,7 +157,7 @@ export function attachWebSocket(server: HttpServer): WebSocketServer {
         const json = JSON.parse(raw.toString()) as unknown;
         parsed = inboundSchema.parse(json) as WsInbound;
       } catch {
-        send(ws, { type: 'error', code: 'VALIDATION_ERROR', message: 'Invalid message' });
+        sendOne(ws, { type: 'error', code: 'VALIDATION_ERROR', message: 'Invalid message' });
         return;
       }
 
@@ -124,26 +168,33 @@ export function attachWebSocket(server: HttpServer): WebSocketServer {
           // next event to populate its UI.
           if (parsed.topic === ACCOUNTS_TOPIC) {
             for (const summary of accountManager.listSummaries()) {
-              send(ws, { type: 'account-update', account: summary });
+              sendOne(ws, { type: 'account-update', account: summary });
             }
           } else if (parsed.topic.startsWith('account:')) {
             const id = parsed.topic.slice('account:'.length);
             const summary = accountManager.getSummary(id);
-            if (summary) send(ws, { type: 'account-update', account: summary });
+            if (summary) sendOne(ws, { type: 'account-update', account: summary });
           }
           break;
         }
         case 'unsubscribe':
           getState(ws).subscriptions.delete(parsed.topic);
           break;
-        case 'chat':
+        case 'chat': {
+          // Drop control chars + collapse internal whitespace.
+          const cleaned = parsed.message.replace(/[\r\n]+/g, ' ').trim();
+          if (!cleaned) {
+            sendOne(ws, { type: 'error', code: 'VALIDATION_ERROR', message: 'Empty message' });
+            return;
+          }
           try {
-            accountManager.sendChat(parsed.accountId, parsed.message);
+            accountManager.sendChat(parsed.accountId, cleaned);
           } catch (err) {
             const message = err instanceof Error ? err.message : 'send failed';
-            send(ws, { type: 'error', code: 'CHAT_FAILED', message });
+            sendOne(ws, { type: 'error', code: 'CHAT_FAILED', message });
           }
           break;
+        }
       }
     });
 
@@ -157,37 +208,34 @@ export function attachWebSocket(server: HttpServer): WebSocketServer {
     });
   });
 
-  // Wire AccountManager events into the broadcast layer.
+  // Wire AccountManager events into the broadcast layer. Payload is
+  // JSON-serialized once per event, not per client.
   const onAccountChanged = (summary: AccountSummary): void => {
     const acctTopic = accountTopic(summary.id);
-    for (const ws of wss.clients) {
-      if (isSubscribed(ws, ACCOUNTS_TOPIC) || isSubscribed(ws, acctTopic)) {
-        send(ws, { type: 'account-update', account: summary });
-      }
-    }
+    broadcast(
+      wss.clients,
+      { type: 'account-update', account: summary },
+      (ws) => isSubscribed(ws, ACCOUNTS_TOPIC) || isSubscribed(ws, acctTopic),
+    );
   };
   const onAccountRemoved = (accountId: string): void => {
-    for (const ws of wss.clients) {
-      if (isSubscribed(ws, ACCOUNTS_TOPIC) || isSubscribed(ws, accountTopic(accountId))) {
-        send(ws, { type: 'account-removed', accountId });
-      }
-    }
+    broadcast(
+      wss.clients,
+      { type: 'account-removed', accountId },
+      (ws) => isSubscribed(ws, ACCOUNTS_TOPIC) || isSubscribed(ws, accountTopic(accountId)),
+    );
   };
   const onChat = (accountId: string, chat: ChatEvent): void => {
     const topic = accountTopic(accountId);
-    for (const ws of wss.clients) {
-      if (isSubscribed(ws, topic)) {
-        send(ws, { type: 'chat', accountId, chat });
-      }
-    }
+    broadcast(wss.clients, { type: 'chat', accountId, chat }, (ws) => isSubscribed(ws, topic));
   };
   const onLifecycle = (accountId: string, event: BotLifecycleEvent): void => {
     const topic = accountTopic(accountId);
-    for (const ws of wss.clients) {
-      if (isSubscribed(ws, topic) || isSubscribed(ws, ACCOUNTS_TOPIC)) {
-        send(ws, { type: 'event', accountId, event });
-      }
-    }
+    broadcast(
+      wss.clients,
+      { type: 'event', accountId, event },
+      (ws) => isSubscribed(ws, topic) || isSubscribed(ws, ACCOUNTS_TOPIC),
+    );
   };
 
   accountManager.on('account-changed', onAccountChanged);

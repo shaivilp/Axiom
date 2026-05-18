@@ -18,7 +18,12 @@ import type {
   ChatEvent,
 } from './events.js';
 
-export interface BotInstanceOptions {
+/**
+ * The subset of an Account row a BotInstance needs to operate. Owned by
+ * the BotInstance (not stashed via a hidden field on a foreign type) and
+ * refreshed via `updateMeta()` whenever the AccountManager persists state.
+ */
+export interface BotMetadata {
   id: string;
   ordinal: number;
   label: string;
@@ -27,6 +32,12 @@ export interface BotInstanceOptions {
   serverHost: string;
   serverPort: number;
   version: string;
+  autoConnect: boolean;
+  desiredState: 'running' | 'stopped';
+}
+
+export interface BotInstanceOptions {
+  meta: BotMetadata;
   behaviors: unknown; // raw JSON, parsed here
   reconnectPolicy?: ReconnectPolicy;
 }
@@ -59,15 +70,19 @@ export declare interface BotInstance {
  * the manager learns of unrecoverable problems.
  */
 export class BotInstance extends EventEmitter {
-  readonly id: string;
-  private opts: BotInstanceOptions;
+  private meta: BotMetadata;
   private behaviorConfig: BehaviorConfig;
   private log: Logger;
+  private policy: ReconnectPolicy;
 
   private bot: Bot | null = null;
   private state: BotState = 'idle';
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
+  // Transient errors that don't kill the session — we keep the latest so it
+  // can be surfaced for diagnosis, but we only mark `lastError` (visible in
+  // the UI) when the session actually ends.
+  private latestTransientError: string | null = null;
   private lastError: string | null = null;
   private lastConnectedAt: Date | null = null;
   private connectStartTime: Date | null = null;
@@ -81,10 +96,36 @@ export class BotInstance extends EventEmitter {
 
   constructor(opts: BotInstanceOptions) {
     super();
-    this.id = opts.id;
-    this.opts = opts;
+    this.meta = opts.meta;
     this.behaviorConfig = parseBehaviorConfig(opts.behaviors);
-    this.log = rootLogger.child({ accountId: opts.id, ordinal: opts.ordinal, label: opts.label });
+    this.policy = opts.reconnectPolicy ?? defaultReconnectPolicy;
+    this.log = rootLogger.child({
+      accountId: this.meta.id,
+      ordinal: this.meta.ordinal,
+      label: this.meta.label,
+    });
+  }
+
+  get id(): string {
+    return this.meta.id;
+  }
+
+  getMeta(): Readonly<BotMetadata> {
+    return this.meta;
+  }
+
+  /**
+   * Refresh the cached account metadata after a DB update. Keeps
+   * AccountManager.summarize() honest under sustained state changes
+   * without re-reading the DB on every event.
+   */
+  updateMeta(meta: BotMetadata): void {
+    this.meta = meta;
+    this.log = rootLogger.child({
+      accountId: meta.id,
+      ordinal: meta.ordinal,
+      label: meta.label,
+    });
   }
 
   getState(): BotState {
@@ -123,16 +164,22 @@ export class BotInstance extends EventEmitter {
   /**
    * Push a chat line (or slash command) via this account. Throws if the
    * bot isn't currently connected — callers should pre-check state.
+   * Strips CR/LF so a single dashboard chat call can't stack commands.
    */
   sendChat(text: string): void {
     if (this.state !== 'connected' || !this.bot) {
       throw new Error('Bot is not connected');
     }
-    this.bot.chat(text);
+    const cleaned = text.replace(/[\r\n]+/g, ' ').trim();
+    if (!cleaned) return;
+    this.bot.chat(cleaned);
   }
 
   /** Start (or resume) the connect → reconnect loop. */
   start(): void {
+    // Always clear the stop flag first — even if we're early-returning we
+    // want a Stop→Start race during teardown to leave us in the running
+    // path, not the suppressed one.
     this.stopRequested = false;
     if (this.state === 'connected' || this.state === 'connecting' || this.state === 'authenticating') {
       return;
@@ -165,9 +212,9 @@ export class BotInstance extends EventEmitter {
 
   private connect(): void {
     if (this.stopRequested) return;
-    this.lastError = null;
+    this.latestTransientError = null;
 
-    const useMs = this.opts.authType === 'microsoft';
+    const useMs = this.meta.authType === 'microsoft';
     this.setState(useMs ? 'authenticating' : 'connecting');
 
     void this.doConnect().catch((err) => {
@@ -177,19 +224,27 @@ export class BotInstance extends EventEmitter {
 
   private async doConnect(): Promise<void> {
     let profilesFolder: string | undefined;
-    if (this.opts.authType === 'microsoft') {
-      profilesFolder = await getProfilesFolder(this.opts.id);
+    if (this.meta.authType === 'microsoft') {
+      profilesFolder = await getProfilesFolder(this.meta.id);
+    }
+
+    // Hardening: a stop() that arrived while we were awaiting must short-circuit
+    // before we allocate a mineflayer socket. Without this, the inflight
+    // doConnect could create a phantom Bot the caller has no reference to.
+    if (this.stopRequested) {
+      this.setState('idle');
+      return;
     }
 
     this.setState('connecting');
 
     // createBot is synchronous; failures show up as 'error' / 'end' events.
     const bot = createBot({
-      username: this.opts.username,
-      host: this.opts.serverHost,
-      port: this.opts.serverPort,
-      version: this.opts.version,
-      auth: this.opts.authType === 'microsoft' ? 'microsoft' : 'offline',
+      username: this.meta.username,
+      host: this.meta.serverHost,
+      port: this.meta.serverPort,
+      version: this.meta.version,
+      auth: this.meta.authType === 'microsoft' ? 'microsoft' : 'offline',
       ...(profilesFolder ? { profilesFolder } : {}),
       // Silence mineflayer's own console logging; everything routes through Pino.
       hideErrors: true,
@@ -202,6 +257,17 @@ export class BotInstance extends EventEmitter {
         this.log.warn({ data }, 'bot: msa code requested mid-connect (cache stale?)');
       },
     });
+
+    // Belt-and-suspenders: stop arrived between the await above and now.
+    if (this.stopRequested) {
+      try {
+        bot.quit('stop arrived during connect');
+      } catch {
+        /* ignore */
+      }
+      this.setState('idle');
+      return;
+    }
 
     this.bot = bot;
     this.wireBotEvents(bot);
@@ -217,21 +283,24 @@ export class BotInstance extends EventEmitter {
       this.lastConnectedAt = new Date();
       this.connectStartTime = new Date();
       this.reconnectAttempt = 0;
+      this.lastError = null;
       this.setState('connected');
       this.emitLifecycle('spawn');
       this.log.info('bot: spawned');
       this.startBehaviors(bot);
 
       // After a successful MS connect, the on-disk cache may have been
-      // refreshed by prismarine-auth — sync it back to the DB. Best-effort,
-      // never blocks the bot.
-      if (this.opts.authType === 'microsoft') {
-        void syncDiskCacheToDb(this.opts.id).catch((err) => {
+      // refreshed by prismarine-auth — sync it back to the DB. The auth
+      // module serializes per-accountId, so a concurrent device-code
+      // finalize cannot clobber a newer token.
+      if (this.meta.authType === 'microsoft') {
+        void syncDiskCacheToDb(this.meta.id).catch((err) => {
           this.log.warn({ err }, 'ms-auth: post-spawn db sync failed');
         });
       }
     });
 
+    // Mineflayer's `chat` event covers the standard "<player> message" form.
     bot.on('chat', (sender: string, text: string) => {
       this.emit('chat', {
         kind: sender === bot.username ? 'self' : 'chat',
@@ -250,38 +319,36 @@ export class BotInstance extends EventEmitter {
       });
     });
 
-    bot.on('message', (jsonMsg) => {
-      // Mineflayer emits 'chat' and 'whisper' separately. 'message' is the
-      // raw firehose — we only forward server/system lines that weren't
-      // already covered above. The simplest filter: anything without a
-      // sender component, treat as system.
-      try {
-        const text = jsonMsg.toString();
-        // Best-effort dedupe — skip messages that *look* like chat lines.
-        if (/^<.+?> /.test(text)) return;
+    // System / server messages. We only forward what mineflayer classifies
+    // as 'system' here; player chat is delivered via 'chat'/'whisper' above
+    // and would otherwise double-fire on modded/Bukkit prefix formats.
+    bot.on('messagestr', (text: string, type: string) => {
+      if (type === 'system' || type === 'announcement') {
         this.emit('chat', {
           kind: 'system',
           text,
           timestamp: new Date().toISOString(),
         });
-      } catch {
-        // ignore
       }
     });
 
     bot.on('kicked', (reason: string) => {
-      this.lastError = `Kicked: ${reason}`;
+      this.latestTransientError = `Kicked: ${reason}`;
       this.emitLifecycle('kicked', reason);
       this.log.warn({ reason }, 'bot: kicked');
     });
 
+    // Non-fatal protocol errors fire here. Don't pin them to `lastError`
+    // (which the UI uses for the persistent red banner) — `end` is the
+    // signal that a session actually died.
     bot.on('error', (err: Error) => {
-      this.lastError = err.message;
+      this.latestTransientError = err.message;
       this.emitLifecycle('error', err.message);
       this.log.warn({ err }, 'bot: error');
     });
 
     bot.on('end', (reason?: string) => {
+      this.lastError = this.latestTransientError ?? (reason ? `Ended: ${reason}` : null);
       this.emitLifecycle('end', reason ?? '');
       this.log.info({ reason }, 'bot: end');
       this.teardownBehaviors();
@@ -307,7 +374,7 @@ export class BotInstance extends EventEmitter {
     }
     this.reconnectAttempt += 1;
 
-    if (hasExceededRetries(this.reconnectAttempt)) {
+    if (hasExceededRetries(this.reconnectAttempt, this.policy)) {
       this.setState('failed');
       this.emit('fatal', `Exceeded max reconnect attempts (${this.reconnectAttempt})`);
       this.log.error(
@@ -317,7 +384,7 @@ export class BotInstance extends EventEmitter {
       return;
     }
 
-    const delay = computeBackoff(this.reconnectAttempt, defaultReconnectPolicy);
+    const delay = computeBackoff(this.reconnectAttempt, this.policy);
     this.setState('reconnecting');
     this.log.info({ delayMs: delay, attempt: this.reconnectAttempt }, 'bot: scheduling reconnect');
     this.reconnectTimer = setTimeout(() => {
@@ -328,9 +395,9 @@ export class BotInstance extends EventEmitter {
 
   private startBehaviors(bot: Bot): void {
     const ctx: TemplateContext = {
-      ordinal: this.opts.ordinal,
-      username: this.opts.username,
-      label: this.opts.label,
+      ordinal: this.meta.ordinal,
+      username: this.meta.username,
+      label: this.meta.label,
     };
 
     this.loginCommands = new LoginCommandsRunner(

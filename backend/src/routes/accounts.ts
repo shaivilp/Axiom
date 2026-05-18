@@ -8,6 +8,21 @@ const router = Router();
 
 const idParamSchema = z.object({ id: z.string().uuid() });
 
+/**
+ * Single middleware that validates :id and stashes it on the request.
+ * Avoids repeating `idParamSchema.parse(req.params)` in every handler.
+ * The augmentation of `Request` itself lives in src/express.d.ts.
+ */
+function withAccountId(req: Request, _res: Response, next: NextFunction): void {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    req.accountId = id;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 const createSchema = z.object({
   label: z.string().min(1).max(64),
   username: z.string().min(1).max(64),
@@ -29,6 +44,7 @@ const updateSchema = z.object({
 });
 
 const chatSchema = z.object({
+  // Length-bounded; sanitized (CR/LF stripped) inside the handler.
   message: z.string().min(1).max(256),
 });
 
@@ -58,10 +74,9 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 // GET /accounts/:id
-router.get('/:id', (req: Request, res: Response, next: NextFunction) => {
+router.get('/:id', withAccountId, (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = idParamSchema.parse(req.params);
-    const summary = accountManager.getSummary(id);
+    const summary = accountManager.getSummary(req.accountId!);
     if (!summary) {
       throw new AppError(ErrorCodes.ACCOUNT_NOT_FOUND, 'Account not found', 404);
     }
@@ -72,11 +87,10 @@ router.get('/:id', (req: Request, res: Response, next: NextFunction) => {
 });
 
 // PATCH /accounts/:id
-router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => {
+router.patch('/:id', withAccountId, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = idParamSchema.parse(req.params);
     const patch = updateSchema.parse(req.body);
-    const updated = await accountManager.updateAccount(id, patch);
+    const updated = await accountManager.updateAccount(req.accountId!, patch);
     res.json({ account: updated });
   } catch (err) {
     next(err);
@@ -84,10 +98,9 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
 });
 
 // DELETE /accounts/:id
-router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
+router.delete('/:id', withAccountId, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = idParamSchema.parse(req.params);
-    await accountManager.deleteAccount(id);
+    await accountManager.deleteAccount(req.accountId!);
     res.status(204).end();
   } catch (err) {
     next(err);
@@ -95,10 +108,9 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
 });
 
 // POST /accounts/:id/start
-router.post('/:id/start', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/start', withAccountId, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = idParamSchema.parse(req.params);
-    const summary = await accountManager.startAccount(id);
+    const summary = await accountManager.startAccount(req.accountId!);
     res.json({ account: summary });
   } catch (err) {
     next(err);
@@ -106,22 +118,25 @@ router.post('/:id/start', async (req: Request, res: Response, next: NextFunction
 });
 
 // POST /accounts/:id/stop
-router.post('/:id/stop', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:id/stop', withAccountId, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = idParamSchema.parse(req.params);
-    const summary = await accountManager.stopAccount(id);
+    const summary = await accountManager.stopAccount(req.accountId!);
     res.json({ account: summary });
   } catch (err) {
     next(err);
   }
 });
 
-// POST /accounts/:id/chat — send a chat line / slash command via this account
-router.post('/:id/chat', (req: Request, res: Response, next: NextFunction) => {
+// POST /accounts/:id/chat
+router.post('/:id/chat', withAccountId, (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = idParamSchema.parse(req.params);
     const { message } = chatSchema.parse(req.body);
-    accountManager.sendChat(id, message);
+    // Strip CR/LF so the dashboard chat call cannot stack commands.
+    const cleaned = message.replace(/[\r\n]+/g, ' ').trim();
+    if (!cleaned) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Empty message after sanitization', 400);
+    }
+    accountManager.sendChat(req.accountId!, cleaned);
     res.status(202).json({ sent: true });
   } catch (err) {
     next(err);

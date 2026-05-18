@@ -8,28 +8,37 @@ import { AccountDetail } from '@/routes/AccountDetail';
 import { Settings } from '@/routes/Settings';
 import { useAuth } from '@/store/auth';
 import { setUnauthorizedHandler } from '@/lib/api';
-import { wsManager } from '@/lib/ws';
 
 function Router() {
   const navigate = useNavigate();
-  const token = useAuth((s) => s.token);
-  const logout = useAuth((s) => s.logout);
+  const status = useAuth((s) => s.status);
+  const bootstrap = useAuth((s) => s.bootstrap);
+  const markUnauthenticated = useAuth((s) => s.markUnauthenticated);
 
-  // Global 401 handler: clear auth + bounce to /login.
+  // Global 401 handler: clear local auth state + bounce to /login.
   useEffect(() => {
     setUnauthorizedHandler(() => {
-      logout();
+      markUnauthenticated();
       navigate('/login', { replace: true });
     });
-  }, [navigate, logout]);
+  }, [navigate, markUnauthenticated]);
 
-  // Open the WS connection once we have a token; close it on logout.
+  // On first mount, probe /whoami to discover whether the session cookie
+  // is still valid. This avoids flashing the login screen for already-
+  // authenticated users.
   useEffect(() => {
-    if (token) wsManager.connect();
-    else wsManager.disconnect();
-  }, [token]);
+    if (status === 'unknown') void bootstrap();
+  }, [status, bootstrap]);
 
-  if (!token) {
+  if (status === 'unknown') {
+    return (
+      <div className="bg-background text-muted-foreground flex min-h-screen items-center justify-center text-sm">
+        Loading…
+      </div>
+    );
+  }
+
+  if (status === 'unauthenticated') {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />

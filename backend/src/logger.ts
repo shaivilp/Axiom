@@ -4,6 +4,11 @@ import { config, isDev } from './config.js';
 const redactPaths = [
   'req.headers.authorization',
   'req.headers.cookie',
+  'req.headers["set-cookie"]',
+  'res.headers["set-cookie"]',
+  // Strip URL query strings entirely — they may contain leaked tokens
+  // from older clients or other paths the request serializer touches.
+  'req.url',
   '*.password',
   '*.token',
   '*.accessToken',

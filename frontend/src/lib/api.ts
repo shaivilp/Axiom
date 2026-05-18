@@ -7,12 +7,14 @@ import type {
 } from './types';
 
 /**
- * Single fetch wrapper that:
- *   1. Injects the dashboard bearer token from localStorage
- *   2. Parses JSON and throws ApiClientError on non-2xx
- *   3. Triggers a logout (clear token + redirect) on 401
+ * Single fetch wrapper.
  *
- * Everything else is just typed wrappers around it.
+ *   - Sends `credentials: 'include'` so the HttpOnly session cookie travels
+ *     with every request (set by /api/v1/auth/login).
+ *   - Triggers a logout-style redirect on 401 (cookie absent / expired).
+ *
+ * No bearer token is ever read from localStorage — XSS cannot exfiltrate
+ * the session.
  */
 export class ApiClientError extends Error {
   code: string;
@@ -24,37 +26,24 @@ export class ApiClientError extends Error {
   }
 }
 
-const TOKEN_KEY = 'afkbot.token';
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
 let onUnauthorized: (() => void) | null = null;
 export function setUnauthorizedHandler(cb: () => void): void {
   onUnauthorized = cb;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = getToken();
   const headers = new Headers(init.headers);
-  if (token) headers.set('Authorization', `Bearer ${token}`);
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
 
-  const res = await fetch(`/api/v1${path}`, { ...init, headers });
+  const res = await fetch(`/api/v1${path}`, {
+    ...init,
+    headers,
+    credentials: 'include',
+  });
 
   if (res.status === 401) {
-    clearToken();
     onUnauthorized?.();
     throw new ApiClientError('Unauthorized', 'INVALID_TOKEN', 401);
   }
@@ -83,6 +72,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  // Auth session
+  login: (token: string) =>
+    request<void>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
+
   ping: () => request<{ pong: boolean }>('/ping'),
   whoami: () => request<{ authenticated: boolean }>('/whoami'),
 

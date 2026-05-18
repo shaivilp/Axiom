@@ -76,6 +76,12 @@ export const useAccounts = create<AccountsState>((set) => ({
         // Surfaced by Toast subscribers; nothing to do in store.
         break;
       }
+      default: {
+        // Exhaustiveness check — TS will error here if a new WsOutbound
+        // variant is added without a corresponding case above.
+        const _exhaustive: never = msg;
+        void _exhaustive;
+      }
     }
   },
 

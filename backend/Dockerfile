@@ -22,20 +22,29 @@ WORKDIR /repo/backend
 RUN pnpm prisma:generate
 RUN pnpm build
 
+# ---------- deploy: pnpm deploy produces a self-contained backend dir
+# with a flat node_modules under /deploy. This avoids the brittle
+# `../node_modules` escape in the runtime image.
+WORKDIR /repo
+RUN pnpm --filter backend --prod deploy /deploy
+# Re-run prisma generate inside /deploy because pnpm deploy strips the
+# generated client (it lives in the .pnpm store, not in dependencies).
+WORKDIR /deploy
+COPY backend/prisma /deploy/prisma
+RUN cd /deploy && node node_modules/prisma/build/index.js generate
+
 # ---------- runtime ----------
 FROM node:20-alpine AS runtime
 
-RUN apk add --no-cache openssl tini
+RUN apk add --no-cache openssl tini wget
 RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 
-# Bring only the production artifacts.
-COPY --from=builder /repo/backend/package.json ./package.json
+# Self-contained deploy bundle.
+COPY --from=builder /deploy/package.json ./package.json
+COPY --from=builder /deploy/node_modules ./node_modules
+COPY --from=builder /deploy/prisma ./prisma
 COPY --from=builder /repo/backend/dist ./dist
-COPY --from=builder /repo/backend/prisma ./prisma
-# Hoisted pnpm node_modules — the backend's deps are inside the monorepo store.
-COPY --from=builder /repo/node_modules ../node_modules
-COPY --from=builder /repo/backend/node_modules ./node_modules
 
 # Persistent dirs (mounted as volumes in compose).
 RUN mkdir -p /data/.msauth-cache && chown -R app:app /data /app
@@ -49,5 +58,7 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3000/healthz || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--"]
-# Run migrations idempotently at boot, then start the server.
-CMD ["sh", "-c", "node node_modules/prisma/build/index.js db push --skip-generate --accept-data-loss=false && node dist/index.js"]
+# `prisma migrate deploy` is the production migration path. It applies any
+# pending migration files in prisma/migrations and fails fast if the DB
+# state is incompatible (no destructive auto-fixes). Then start the server.
+CMD ["sh", "-c", "node node_modules/prisma/build/index.js migrate deploy && node dist/index.js"]

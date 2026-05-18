@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Copy, ExternalLink, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -39,6 +39,14 @@ export function AddAccountModal({ open, onOpenChange, defaults }: Props) {
   const [version, setVersion] = useState(defaults?.version ?? '1.8.9');
   const [autoConnect, setAutoConnect] = useState(true);
   const [flow, setFlow] = useState<FlowState>({ phase: 'idle' });
+  // H12: aborts the device-code poll loop if the modal is closed mid-flight.
+  const pollAbort = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      pollAbort.current?.abort();
+    };
+  }, []);
 
   const reset = () => {
     setLabel('');
@@ -52,7 +60,11 @@ export function AddAccountModal({ open, onOpenChange, defaults }: Props) {
   };
 
   const close = (value: boolean) => {
-    if (!value) reset();
+    if (!value) {
+      pollAbort.current?.abort();
+      pollAbort.current = null;
+      reset();
+    }
     onOpenChange(value);
   };
 
@@ -89,12 +101,24 @@ export function AddAccountModal({ open, onOpenChange, defaults }: Props) {
   };
 
   const pollUntilDone = async (accountId: string) => {
+    pollAbort.current?.abort();
+    const ctrl = new AbortController();
+    pollAbort.current = ctrl;
     setFlow((s) => (s.phase === 'device-code' ? { ...s, phase: 'polling' } : s));
     const start = Date.now();
     while (Date.now() - start < 15 * 60_000) {
-      await new Promise((r) => setTimeout(r, 3_000));
+      if (ctrl.signal.aborted) return;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 3_000);
+        ctrl.signal.addEventListener('abort', () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+      if (ctrl.signal.aborted) return;
       try {
         const status = await api.getMsAuthStatus(accountId);
+        if (ctrl.signal.aborted) return;
         if (status.status === 'success') {
           await api.completeMsAuth(accountId);
           setFlow({ phase: 'success' });
@@ -109,12 +133,15 @@ export function AddAccountModal({ open, onOpenChange, defaults }: Props) {
           return;
         }
       } catch (err) {
+        if (ctrl.signal.aborted) return;
         const msg = err instanceof ApiClientError ? err.message : 'poll failed';
         setFlow({ phase: 'error', message: msg });
         return;
       }
     }
-    setFlow({ phase: 'error', message: 'Device code expired before completing' });
+    if (!ctrl.signal.aborted) {
+      setFlow({ phase: 'error', message: 'Device code expired before completing' });
+    }
   };
 
   return (
