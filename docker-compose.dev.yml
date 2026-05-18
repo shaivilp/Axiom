@@ -1,0 +1,17 @@
+# Dev override — run with:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Exposes Postgres on the host for `prisma studio` / direct DB inspection,
+# and binds the backend port for curl-friendly local testing without nginx.
+
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  backend:
+    ports:
+      - "3000:3000"
+    environment:
+      LOG_LEVEL: debug
+      NODE_ENV: development
