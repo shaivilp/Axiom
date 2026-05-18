@@ -1,0 +1,96 @@
+// Prisma schema for the AFK bot dashboard.
+// One row per Minecraft account; bot runtime state lives in memory.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AccountAuthType {
+  offline
+  microsoft
+}
+
+enum AccountState {
+  idle
+  authenticating
+  connecting
+  connected
+  disconnected
+  reconnecting
+  failed
+}
+
+model Account {
+  id              String          @id @default(uuid()) @db.Uuid
+  // Stable, human-friendly numeric ID. Used by the {{ordinal}} template
+  // substitution in login commands and chat pings — e.g. a global default of
+  // `/f warp cac{{ordinal}}` renders as `/f warp cac1` for ordinal=1.
+  ordinal         Int             @unique @default(autoincrement())
+  label           String
+  username        String
+  authType        AccountAuthType
+
+  serverHost      String
+  serverPort      Int             @default(25565)
+  version         String          @default("1.8.9")
+
+  // Whether the AccountManager should boot this bot on process start, and
+  // restart it after disconnects within the reconnect policy. The user can
+  // also explicitly stop a bot — see `desiredState`.
+  autoConnect     Boolean         @default(true)
+  // The user's desired runtime state for this bot. The AccountManager
+  // continuously reconciles actual state toward this. Set to `stopped` by
+  // the stop endpoint to suppress all reconnect attempts.
+  desiredState    AccountDesiredState @default(running)
+
+  // BehaviorConfig blob (validated by zod on read/write). See
+  // src/minecraft/behaviors/schema.ts for the shape.
+  behaviors       Json            @default("{}")
+
+  lastState       AccountState    @default(idle)
+  lastError       String?
+  lastConnectedAt DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  token           AccountToken?
+
+  @@index([username])
+  @@map("accounts")
+}
+
+enum AccountDesiredState {
+  running
+  stopped
+}
+
+// Encrypted Microsoft auth blob. One row per account with authType=microsoft.
+// AES-256-GCM ciphertext, nonce, and tag are stored separately, all base64.
+model AccountToken {
+  accountId  String   @id @db.Uuid
+  ciphertext String
+  nonce      String
+  authTag    String   @map("auth_tag")
+  updatedAt  DateTime @updatedAt
+  account    Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("account_tokens")
+}
+
+// Single-row table. We pin its UUID at app boot so upserts are trivial.
+model Settings {
+  id                String   @id @db.Uuid
+  defaultServerHost String?
+  defaultServerPort Int?     @default(25565)
+  defaultVersion    String?  @default("1.8.9")
+  defaultBehaviors  Json     @default("{}")
+  updatedAt         DateTime @updatedAt
+
+  @@map("settings")
+}

@@ -1,0 +1,19 @@
+{
+  "name": "afkbot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted Minecraft AFK bot with multi-account support and web dashboard",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter backend dev",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.1.2"
+}
