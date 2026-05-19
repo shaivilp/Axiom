@@ -29,6 +29,7 @@
     "mineflayer": "4.27.0",
     "pino": "9.6.0",
     "pino-http": "10.4.0",
+    "prisma": "6.1.0",
     "prismarine-auth": "2.7.0",
     "ws": "8.18.0",
     "zod": "3.24.1"
@@ -42,7 +43,6 @@
     "@types/node": "22.10.5",
     "@types/ws": "8.5.13",
     "pino-pretty": "13.0.0",
-    "prisma": "6.1.0",
     "tsx": "4.19.2",
     "typescript": "5.7.2",
     "vitest": "2.1.8"

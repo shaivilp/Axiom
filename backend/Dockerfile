@@ -26,13 +26,12 @@ RUN pnpm build
 # ---------- deploy: pnpm deploy produces a self-contained backend dir
 # with a flat node_modules under /deploy. This avoids the brittle
 # `../node_modules` escape in the runtime image.
+#
+# The deploy's own postinstall runs `prisma generate` again because
+# we keep `prisma` in `dependencies` (so the CLI is available at
+# runtime for `migrate deploy`). No explicit generate step needed.
 WORKDIR /repo
 RUN pnpm --filter backend --prod --legacy deploy /deploy
-# Re-run prisma generate inside /deploy because pnpm deploy strips the
-# generated client (it lives in the .pnpm store, not in dependencies).
-WORKDIR /deploy
-COPY backend/prisma /deploy/prisma
-RUN cd /deploy && node node_modules/prisma/build/index.js generate
 
 # ---------- runtime ----------
 FROM node:22-alpine AS runtime
