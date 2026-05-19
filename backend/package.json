@@ -6,9 +6,9 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "build": "node -e \"process.exit(require('child_process').spawnSync(process.execPath,[require.resolve('typescript/bin/tsc'),'-p','tsconfig.build.json'],{stdio:'inherit'}).status)\"",
     "start": "node dist/index.js",
-    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "typecheck": "node -e \"process.exit(require('child_process').spawnSync(process.execPath,[require.resolve('typescript/bin/tsc'),'--noEmit'],{stdio:'inherit'}).status)\"",
     "lint": "eslint src --ext .ts",
     "test": "vitest run",
     "test:watch": "vitest",

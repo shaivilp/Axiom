@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
+    "build": "node -e \"require('child_process').spawnSync(process.execPath,[require.resolve('typescript/bin/tsc'),'-b'],{stdio:'inherit'}).status===0||process.exit(1)\" && node -e \"require('child_process').spawnSync(process.execPath,[require.resolve('vite/bin/vite.js'),'build'],{stdio:'inherit'}).status===0||process.exit(1)\"",
     "preview": "vite preview",
-    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "typecheck": "node -e \"process.exit(require('child_process').spawnSync(process.execPath,[require.resolve('typescript/bin/tsc'),'--noEmit'],{stdio:'inherit'}).status)\"",
     "lint": "eslint src --ext .ts,.tsx"
   },
   "dependencies": {
