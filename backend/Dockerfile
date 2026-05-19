@@ -11,15 +11,16 @@ WORKDIR /repo
 # Workspace lockfile + manifests first for cache friendliness.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY backend/package.json backend/
+# Prisma schema must be in place BEFORE install — backend/package.json's
+# postinstall script runs `prisma generate`, which needs the schema file.
+COPY backend/prisma backend/prisma
 RUN pnpm install --filter backend --frozen-lockfile
 
-# Now the source; prisma generate runs from postinstall and needs the schema.
-COPY backend/prisma backend/prisma
+# Now the rest of the source.
 COPY backend/tsconfig.json backend/tsconfig.build.json backend/
 COPY backend/src backend/src
 
 WORKDIR /repo/backend
-RUN pnpm prisma:generate
 RUN pnpm build
 
 # ---------- deploy: pnpm deploy produces a self-contained backend dir
