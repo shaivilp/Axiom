@@ -16,9 +16,10 @@ COPY backend/package.json backend/
 COPY backend/prisma backend/prisma
 RUN pnpm install --filter backend --frozen-lockfile
 # Some host filesystems drop the execute bit on bin files that pnpm
-# materializes from its content-addressable store. Make sure every
-# CLI in node_modules is runnable before the build step invokes them.
-RUN find /repo -path "*/node_modules/*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
+# materializes from its content-addressable store. Recursively chmod
+# every `.bin` and `bin` directory under any node_modules so the
+# shell shims AND their symlink targets are runnable.
+RUN find /repo -type d \( -name ".bin" -o -name "bin" \) -path "*node_modules*" -exec sh -c 'chmod -R a+rx "$@"' _ {} + 2>/dev/null || true
 
 # Now the rest of the source.
 COPY backend/tsconfig.json backend/tsconfig.build.json backend/
