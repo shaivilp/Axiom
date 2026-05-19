@@ -15,6 +15,10 @@ COPY backend/package.json backend/
 # postinstall script runs `prisma generate`, which needs the schema file.
 COPY backend/prisma backend/prisma
 RUN pnpm install --filter backend --frozen-lockfile
+# Some host filesystems drop the execute bit on bin files that pnpm
+# materializes from its content-addressable store. Make sure every
+# CLI in node_modules is runnable before the build step invokes them.
+RUN find /repo -path "*/node_modules/*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
 
 # Now the rest of the source.
 COPY backend/tsconfig.json backend/tsconfig.build.json backend/

@@ -12,6 +12,10 @@ COPY frontend/package.json frontend/
 COPY backend/package.json backend/
 COPY backend/prisma backend/prisma
 RUN pnpm install --filter frontend --frozen-lockfile
+# Some host filesystems drop the execute bit on bin files that pnpm
+# materializes from its content-addressable store. Make sure every
+# CLI in node_modules is runnable before the build step invokes it.
+RUN find /repo -path "*/node_modules/*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
 
 COPY frontend ./frontend
 WORKDIR /repo/frontend
