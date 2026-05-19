@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ---------- builder ----------
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 RUN apk add --no-cache python3 make g++ openssl
 RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
@@ -34,7 +34,7 @@ COPY backend/prisma /deploy/prisma
 RUN cd /deploy && node node_modules/prisma/build/index.js generate
 
 # ---------- runtime ----------
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 
 RUN apk add --no-cache openssl tini wget
 RUN addgroup -S app && adduser -S app -G app
