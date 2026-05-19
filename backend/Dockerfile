@@ -27,7 +27,7 @@ RUN pnpm build
 # with a flat node_modules under /deploy. This avoids the brittle
 # `../node_modules` escape in the runtime image.
 WORKDIR /repo
-RUN pnpm --filter backend --prod deploy /deploy
+RUN pnpm --filter backend --prod --legacy deploy /deploy
 # Re-run prisma generate inside /deploy because pnpm deploy strips the
 # generated client (it lives in the .pnpm store, not in dependencies).
 WORKDIR /deploy
