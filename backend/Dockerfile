@@ -19,7 +19,9 @@ RUN pnpm install --filter backend --frozen-lockfile
 # materializes from its content-addressable store. Recursively chmod
 # every `.bin` and `bin` directory under any node_modules so the
 # shell shims AND their symlink targets are runnable.
-RUN find /repo -type d \( -name ".bin" -o -name "bin" \) -path "*node_modules*" -exec sh -c 'chmod -R a+rx "$@"' _ {} + 2>/dev/null || true
+RUN find /repo -type d -name ".bin" -path "*node_modules*" -exec chmod -R a+rx {} + ; \
+    find /repo -type d -name "bin"  -path "*node_modules*" -exec chmod -R a+rx {} + ; \
+    true
 
 # Now the rest of the source.
 COPY backend/tsconfig.json backend/tsconfig.build.json backend/

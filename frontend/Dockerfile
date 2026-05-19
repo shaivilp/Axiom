@@ -15,8 +15,12 @@ RUN pnpm install --filter frontend --frozen-lockfile
 # Some host filesystems drop the execute bit on bin files that pnpm
 # materializes from its content-addressable store. Recursively chmod
 # every `.bin` and `bin` directory under any node_modules so the
-# shell shims AND their symlink targets are runnable.
-RUN find /repo -type d \( -name ".bin" -o -name "bin" \) -path "*node_modules*" -exec sh -c 'chmod -R a+rx "$@"' _ {} + 2>/dev/null || true
+# shell shims AND their symlink targets are runnable. (Two separate
+# finds — using -o with parens in a Dockerfile RUN trips on shell
+# escaping; this avoids the whole issue.)
+RUN find /repo -type d -name ".bin" -path "*node_modules*" -exec chmod -R a+rx {} + ; \
+    find /repo -type d -name "bin"  -path "*node_modules*" -exec chmod -R a+rx {} + ; \
+    true
 
 COPY frontend ./frontend
 WORKDIR /repo/frontend
