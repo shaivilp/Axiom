@@ -19,3 +19,22 @@ export const defaultIntervalCommandConfig: IntervalCommandConfig = {
   intervalMs: 300_000,
   commands: ['/help'],
 };
+
+/**
+ * Normalize a BehaviorConfig for persistence. The chat-ping textarea keeps its
+ * lines raw while editing (so a trailing space mid-type isn't stripped on every
+ * keystroke); cleaning is deferred to save time here: trim each line, drop
+ * blanks, and fall back to the default if nothing's left (the backend requires
+ * at least one message). Blank login-command rows are dropped too.
+ */
+export function cleanBehaviorConfig(b: BehaviorConfig): BehaviorConfig {
+  const messages = b.chatPing.messages.map((m) => m.trim()).filter(Boolean);
+  return {
+    ...b,
+    chatPing: {
+      ...b.chatPing,
+      messages: messages.length > 0 ? messages : defaultBehaviorConfig.chatPing.messages,
+    },
+    loginCommands: b.loginCommands.filter((c) => c.command.trim() !== ''),
+  };
+}

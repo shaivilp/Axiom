@@ -11,7 +11,7 @@ import { BehaviorConfigForm } from '@/components/behavior-config-form';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { api, ApiClientError } from '@/lib/api';
-import { defaultBehaviorConfig, defaultIntervalCommandConfig } from '@/lib/behaviors';
+import { cleanBehaviorConfig, defaultBehaviorConfig, defaultIntervalCommandConfig } from '@/lib/behaviors';
 import type { BehaviorConfig, IntervalCommandConfig, SettingsRow } from '@/lib/types';
 
 export function Settings() {
@@ -39,10 +39,7 @@ export function Settings() {
 
   const onSave = async () => {
     try {
-      const cleanedBehaviors = {
-        ...behaviors,
-        loginCommands: behaviors.loginCommands.filter((c) => c.command.trim() !== ''),
-      };
+      const cleanedBehaviors = cleanBehaviorConfig(behaviors);
       await api.updateSettings({
         defaultServerHost: host || null,
         defaultServerPort: port,
@@ -181,7 +178,10 @@ export function Settings() {
                   onChange={(e) =>
                     setIntervalCommand({
                       ...intervalCommand,
-                      commands: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean),
+                      // Raw lines while typing; trimmed/filtered on save (see
+                      // onSaveIntervalCommand). Trimming per keystroke would
+                      // make typing a space impossible.
+                      commands: e.target.value.split('\n'),
                     })
                   }
                   placeholder="/help&#10;/f warp cac{{ordinal}}"

@@ -15,7 +15,7 @@ import { api, ApiClientError } from '@/lib/api';
 import { wsManager } from '@/lib/ws';
 import { formatRelative, formatTime, formatUptime, useNow } from '@/lib/utils';
 import type { AccountSummary, BehaviorConfig } from '@/lib/types';
-import { defaultBehaviorConfig } from '@/lib/behaviors';
+import { cleanBehaviorConfig, defaultBehaviorConfig } from '@/lib/behaviors';
 
 interface ConnectionForm {
   label: string;
@@ -120,12 +120,10 @@ export function AccountDetail() {
   const onSaveBehaviors = async () => {
     if (!behaviors) return;
     try {
-      // Drop blank login-command rows (e.g. an empty row the user added but
-      // didn't fill in) so they don't trip the backend's min-length check.
-      const cleaned = {
-        ...behaviors,
-        loginCommands: behaviors.loginCommands.filter((c) => c.command.trim() !== ''),
-      };
+      // Trim chat-ping lines and drop blank login-command rows (e.g. an empty
+      // row the user added but didn't fill in) so they don't trip the backend's
+      // min-length checks. Editing keeps lines raw; cleaning happens here.
+      const cleaned = cleanBehaviorConfig(behaviors);
       await api.updateAccount(account.id, { behaviors: cleaned });
       setBehaviors(cleaned);
       toast.success('Behaviors saved');
