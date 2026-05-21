@@ -65,59 +65,70 @@ first account.
 
 ## HTTPS via Cloudflare (e.g. `https://alts.shaivilpatel.me`)
 
-The bundled nginx terminates TLS with a **Cloudflare Origin Certificate**.
-Traffic path:
+The dashboard container serves plain HTTP on `HOST_PORT` (default `5005`).
+TLS is terminated by your **host's nginx** using a **Cloudflare Origin
+Certificate**. Traffic path:
 
 ```
-browser ──HTTPS (CF edge cert)──▶ Cloudflare ──HTTPS (Origin cert)──▶ nginx:443 ──▶ backend
+browser ─HTTPS(CF edge)─▶ Cloudflare ─HTTPS(origin cert)─▶ host nginx :443 ─HTTP─▶ container :5005 ─▶ backend
 ```
+
+This is the right shape when the host already runs nginx (and owns :443).
+A ready-to-install site config lives at
+[`deploy/nginx-host-alts.conf`](deploy/nginx-host-alts.conf).
 
 **1. Create the Origin Certificate**
-In the Cloudflare dashboard for `shaivilpatel.me`:
+Cloudflare dashboard for `shaivilpatel.me`:
 `SSL/TLS → Origin Server → Create Certificate` (default RSA, hostnames
-`alts.shaivilpatel.me` or `*.shaivilpatel.me`). Save the two PEM blocks
-into the repo's `certs/` directory on the homelab:
+`alts.shaivilpatel.me` or `*.shaivilpatel.me`). Save the two PEM blocks on
+the **host**:
 
+```sh
+sudo install -d -m 700 /etc/ssl/cloudflare
+sudo nano /etc/ssl/cloudflare/alts.pem    # the Origin Certificate
+sudo nano /etc/ssl/cloudflare/alts.key    # the Private Key
+sudo chmod 600 /etc/ssl/cloudflare/alts.key
 ```
-certs/origin.pem   # the Origin Certificate
-certs/origin.key   # the Private Key
-```
-
-These are git-ignored — they never leave the host.
 
 **2. Set Cloudflare SSL/TLS mode to Full (strict)**
-`SSL/TLS → Overview → Full (strict)`. This makes Cloudflare validate the
-origin cert on the hop to your server.
+`SSL/TLS → Overview → Full (strict)` — Cloudflare validates the origin cert
+on the hop to your server.
 
 **3. DNS + port forwarding**
 - An `A`/`AAAA` record for `alts.shaivilpatel.me` → your public IP,
   **proxied** (orange cloud).
-- Forward router port **443 → homelab:443**. (Port 80 optional; Cloudflare
-  does "Always Use HTTPS" at the edge.)
+- Forward router port **443 → homelab:443** (the host nginx). Port 80
+  optional; Cloudflare does "Always Use HTTPS" at the edge.
 
-**4. Point the app at the HTTPS origin**
-In `.env`:
+**4. Install the host nginx site**
+```sh
+sudo cp deploy/nginx-host-alts.conf /etc/nginx/conf.d/alts.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
 
+**5. Point the app at the HTTPS origin** — in `.env`:
 ```
 ALLOWED_ORIGIN=https://alts.shaivilpatel.me
-HTTPS_PORT=443
+HOST_PORT=5005
 ```
-
 `ALLOWED_ORIGIN` being `https://` is what flips the session cookie to
-`Secure` — required for login to work over HTTPS.
+`Secure` — required for login over HTTPS.
 
-**5. Bring it up**
+**6. Bring it up**
 ```sh
 docker compose up -d --build
 ```
 
-Load `https://alts.shaivilpatel.me` and log in. The cert files must exist
-before `docker compose up`, or nginx won't start.
+Load `https://alts.shaivilpatel.me` and log in.
 
-**Optional hardening:** restrict the origin to only accept connections from
-[Cloudflare's IP ranges](https://www.cloudflare.com/ips/) at your router or
-with nginx `allow`/`deny`, so nobody can reach the origin IP directly and
+**Optional hardening:** restrict inbound :443 to
+[Cloudflare's IP ranges](https://www.cloudflare.com/ips/) at your firewall
+(or with nginx `allow`/`deny`), so nobody can reach the origin directly and
 bypass Cloudflare.
+
+> Prefer an all-in-Docker setup instead of host nginx? Put Caddy or a
+> Cloudflare Tunnel container in front of `frontend:80` and skip the host
+> nginx entirely — the app only needs `ALLOWED_ORIGIN=https://…`.
 
 ---
 
