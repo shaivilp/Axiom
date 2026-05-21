@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Save, Send } from 'lucide-react';
+import { ArrowLeft, Play, RefreshCw, Save, Send, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -91,6 +91,16 @@ export function AccountDetail() {
     setChatInput('');
   };
 
+  const onPower = async (action: 'start' | 'stop') => {
+    try {
+      await (action === 'start' ? api.startAccount(account.id) : api.stopAccount(account.id));
+      toast.success(action === 'start' ? 'Starting bot…' : 'Stopping bot…');
+    } catch (err) {
+      const msg = err instanceof ApiClientError ? err.message : `${action} failed`;
+      toast.error(`${action === 'start' ? 'Start' : 'Stop'} failed`, { description: msg });
+    }
+  };
+
   const onSaveConnection = async () => {
     try {
       await api.updateAccount(account.id, {
@@ -152,6 +162,24 @@ export function AccountDetail() {
             </p>
           </div>
           <StatusPill state={account.state} />
+          <div className="flex items-center gap-1.5">
+            {(account.desiredState !== 'running' || account.state === 'failed') && (
+              <Button size="sm" onClick={() => void onPower('start')}>
+                {account.state === 'failed' ? (
+                  <RefreshCw className="size-3.5" />
+                ) : (
+                  <Play className="size-3.5" />
+                )}
+                {account.state === 'failed' ? 'Retry' : 'Start'}
+              </Button>
+            )}
+            {account.desiredState === 'running' && account.state !== 'idle' && (
+              <Button size="sm" variant="secondary" onClick={() => void onPower('stop')}>
+                <Square className="size-3.5" />
+                Stop
+              </Button>
+            )}
+          </div>
         </div>
       </header>
 
