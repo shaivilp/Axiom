@@ -63,6 +63,64 @@ first account.
 
 ---
 
+## HTTPS via Cloudflare (e.g. `https://alts.shaivilpatel.me`)
+
+The bundled nginx terminates TLS with a **Cloudflare Origin Certificate**.
+Traffic path:
+
+```
+browser ──HTTPS (CF edge cert)──▶ Cloudflare ──HTTPS (Origin cert)──▶ nginx:443 ──▶ backend
+```
+
+**1. Create the Origin Certificate**
+In the Cloudflare dashboard for `shaivilpatel.me`:
+`SSL/TLS → Origin Server → Create Certificate` (default RSA, hostnames
+`alts.shaivilpatel.me` or `*.shaivilpatel.me`). Save the two PEM blocks
+into the repo's `certs/` directory on the homelab:
+
+```
+certs/origin.pem   # the Origin Certificate
+certs/origin.key   # the Private Key
+```
+
+These are git-ignored — they never leave the host.
+
+**2. Set Cloudflare SSL/TLS mode to Full (strict)**
+`SSL/TLS → Overview → Full (strict)`. This makes Cloudflare validate the
+origin cert on the hop to your server.
+
+**3. DNS + port forwarding**
+- An `A`/`AAAA` record for `alts.shaivilpatel.me` → your public IP,
+  **proxied** (orange cloud).
+- Forward router port **443 → homelab:443**. (Port 80 optional; Cloudflare
+  does "Always Use HTTPS" at the edge.)
+
+**4. Point the app at the HTTPS origin**
+In `.env`:
+
+```
+ALLOWED_ORIGIN=https://alts.shaivilpatel.me
+HTTPS_PORT=443
+```
+
+`ALLOWED_ORIGIN` being `https://` is what flips the session cookie to
+`Secure` — required for login to work over HTTPS.
+
+**5. Bring it up**
+```sh
+docker compose up -d --build
+```
+
+Load `https://alts.shaivilpatel.me` and log in. The cert files must exist
+before `docker compose up`, or nginx won't start.
+
+**Optional hardening:** restrict the origin to only accept connections from
+[Cloudflare's IP ranges](https://www.cloudflare.com/ips/) at your router or
+with nginx `allow`/`deny`, so nobody can reach the origin IP directly and
+bypass Cloudflare.
+
+---
+
 ## How auth works
 
 ### Dashboard auth
@@ -208,10 +266,11 @@ backend startup.
 
 ## Security notes
 
-- HTTPS is **not** terminated by this stack. Put a reverse proxy
-  (Caddy, Traefik, nginx, Cloudflare Tunnel) in front if you expose this
-  to the public internet. The dashboard token is the only thing standing
-  between an attacker and full control of your bot accounts.
+- The bundled nginx **can** terminate TLS using a Cloudflare Origin
+  Certificate (see "HTTPS via Cloudflare" below). If you'd rather front it
+  with Caddy / Traefik / a Cloudflare Tunnel, that works too. The dashboard
+  token is the only thing standing between an attacker and full control of
+  your bot accounts, so don't expose it over plain HTTP beyond your LAN.
 - The backend container runs as a non-root user (`app`).
 - The backend is not published to the host port — only the frontend's
   nginx is reachable from outside the compose network.

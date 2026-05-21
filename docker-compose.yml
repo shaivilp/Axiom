@@ -84,6 +84,11 @@ services:
       - NET_BIND_SERVICE
     ports:
       - "${HOST_PORT:-5005}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      # Cloudflare Origin Certificate (origin.pem) + key (origin.key).
+      # Mounted read-only; never baked into the image or committed.
+      - ./certs:/etc/nginx/certs:ro
     networks: [afkbot]
 
 networks:

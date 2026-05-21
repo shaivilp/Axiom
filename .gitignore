@@ -26,6 +26,12 @@ Thumbs.db
 # Prismarine auth cache (per-account token blobs)
 .minecraft-auth-cache/
 
+# TLS certs / keys (Cloudflare Origin Certificate). Never commit these.
+certs/*.pem
+certs/*.key
+certs/*.crt
+certs/*.cert
+
 # Coverage
 coverage/
 
