@@ -154,10 +154,10 @@ function ChatPingSection({
             update({
               chatPing: {
                 ...value.chatPing,
-                messages: e.target.value
-                  .split('\n')
-                  .map((s) => s.trim())
-                  .filter(Boolean),
+                // Keep lines raw while typing — trimming/dropping blanks per
+                // keystroke would strip a trailing space the instant it's typed
+                // (you could never type a space). Cleaned on save instead.
+                messages: e.target.value.split('\n'),
               },
             })
           }
