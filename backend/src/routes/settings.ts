@@ -1,7 +1,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
-import { behaviorConfigSchema } from '../minecraft/behaviors/schema.js';
+import { accountManager } from '../minecraft/account-manager.js';
+import { behaviorConfigSchema, intervalCommandConfigSchema } from '../minecraft/behaviors/schema.js';
 
 const router = Router();
 
@@ -13,6 +14,7 @@ const updateSchema = z.object({
   defaultServerPort: z.number().int().min(1).max(65535).optional().nullable(),
   defaultVersion: z.string().min(1).max(16).optional().nullable(),
   defaultBehaviors: behaviorConfigSchema.optional(),
+  intervalCommand: intervalCommandConfigSchema.optional(),
 });
 
 router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -38,6 +40,7 @@ router.patch('/', async (req: Request, res: Response, next: NextFunction) => {
         ...(patch.defaultServerPort !== undefined ? { defaultServerPort: patch.defaultServerPort } : {}),
         ...(patch.defaultVersion !== undefined ? { defaultVersion: patch.defaultVersion } : {}),
         ...(patch.defaultBehaviors !== undefined ? { defaultBehaviors: patch.defaultBehaviors as never } : {}),
+        ...(patch.intervalCommand !== undefined ? { intervalCommand: patch.intervalCommand as never } : {}),
       },
       create: {
         id: SETTINGS_ID,
@@ -45,8 +48,15 @@ router.patch('/', async (req: Request, res: Response, next: NextFunction) => {
         ...(patch.defaultServerPort !== undefined ? { defaultServerPort: patch.defaultServerPort } : {}),
         ...(patch.defaultVersion !== undefined ? { defaultVersion: patch.defaultVersion } : {}),
         ...(patch.defaultBehaviors !== undefined ? { defaultBehaviors: patch.defaultBehaviors as never } : {}),
+        ...(patch.intervalCommand !== undefined ? { intervalCommand: patch.intervalCommand as never } : {}),
       },
     });
+
+    // Push the new global interval-command to all running bots immediately.
+    if (patch.intervalCommand !== undefined) {
+      accountManager.setIntervalCommand(patch.intervalCommand);
+    }
+
     res.json({ settings: row });
   } catch (err) {
     next(err);

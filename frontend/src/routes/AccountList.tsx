@@ -1,14 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, LogOut, Plus, Settings as SettingsIcon } from 'lucide-react';
+import { Bot, LogOut, Play, Plus, RefreshCw, Settings as SettingsIcon, Square } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { AccountCard } from '@/components/account-card';
 import { AddAccountModal } from '@/components/add-account-modal';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useAccounts } from '@/store/accounts';
 import { useAuth } from '@/store/auth';
-import { api } from '@/lib/api';
+import { api, ApiClientError } from '@/lib/api';
 import type { SettingsRow } from '@/lib/types';
+
+// Background poll cadence for the dashboard. Account state is normally pushed
+// live over the WebSocket; this is a safety net that keeps the list fresh if
+// the socket silently drops (sleep/wake, proxy timeout) without a reconnect.
+const REFRESH_INTERVAL_MS = 10_000;
 
 export function AccountList() {
   const accountsMap = useAccounts((s) => s.accounts);
@@ -18,6 +24,8 @@ export function AccountList() {
   const logout = useAuth((s) => s.logout);
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState<SettingsRow | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     void loadAll();
@@ -26,8 +34,44 @@ export function AccountList() {
     return unsub;
   }, [loadAll, subscribeAll]);
 
+  // Auto-refresh: re-fetch the account list on a fixed interval as a fallback
+  // to the live WebSocket feed.
+  useEffect(() => {
+    const id = setInterval(() => {
+      void loadAll();
+    }, REFRESH_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [loadAll]);
+
   const onLogout = () => {
     void logout();
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadAll();
+    } finally {
+      // Brief spin so the click registers visually even on a fast refresh.
+      setTimeout(() => setRefreshing(false), 300);
+    }
+  };
+
+  const onBulkPower = async (action: 'start' | 'stop') => {
+    setBulkBusy(true);
+    try {
+      if (action === 'start') await api.startAllAccounts();
+      else await api.stopAllAccounts();
+      toast.success(action === 'start' ? 'Starting all bots…' : 'Stopping all bots…');
+      // WS will stream state changes, but refresh now so the UI reflects the
+      // new desiredState immediately even if a socket frame is in flight.
+      void loadAll();
+    } catch (err) {
+      const msg = err instanceof ApiClientError ? err.message : `${action} all failed`;
+      toast.error(action === 'start' ? 'Start all failed' : 'Stop all failed', { description: msg });
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   const accounts = useMemo(
@@ -56,19 +100,41 @@ export function AccountList() {
       </header>
 
       <main className="container py-6">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold">Accounts</h1>
             <p className="text-muted-foreground text-sm">
               {accounts.length === 0
                 ? 'No accounts yet — add one to get started.'
-                : `${accounts.filter((a) => a.state === 'connected').length} of ${accounts.length} connected`}
+                : `${accounts.filter((a) => a.state === 'connected').length} of ${accounts.length} connected · auto-refreshes every ${REFRESH_INTERVAL_MS / 1000}s`}
             </p>
           </div>
-          <Button onClick={() => setOpen(true)}>
-            <Plus className="size-4" />
-            Add account
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => void onRefresh()} disabled={refreshing}>
+              <RefreshCw className={`size-4 ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void onBulkPower('start')}
+              disabled={bulkBusy || accounts.length === 0}
+            >
+              <Play className="size-4" />
+              Start all
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void onBulkPower('stop')}
+              disabled={bulkBusy || accounts.length === 0}
+            >
+              <Square className="size-4" />
+              Stop all
+            </Button>
+            <Button onClick={() => setOpen(true)}>
+              <Plus className="size-4" />
+              Add account
+            </Button>
+          </div>
         </div>
 
         {!loaded ? (

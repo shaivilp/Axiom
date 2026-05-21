@@ -2,8 +2,15 @@ import { EventEmitter } from 'node:events';
 import { createBot, type Bot } from 'mineflayer';
 import { logger as rootLogger, type Logger } from '../logger.js';
 import { ChatPingBehavior } from './behaviors/chat-ping.js';
+import { IntervalCommandBehavior } from './behaviors/interval-command.js';
 import { LoginCommandsRunner } from './behaviors/login-commands.js';
-import { parseBehaviorConfig, type BehaviorConfig, type TemplateContext } from './behaviors/schema.js';
+import {
+  parseBehaviorConfig,
+  parseIntervalCommandConfig,
+  type BehaviorConfig,
+  type IntervalCommandConfig,
+  type TemplateContext,
+} from './behaviors/schema.js';
 import { WiggleBehavior } from './behaviors/wiggle.js';
 import {
   computeBackoff,
@@ -39,6 +46,9 @@ export interface BotMetadata {
 export interface BotInstanceOptions {
   meta: BotMetadata;
   behaviors: unknown; // raw JSON, parsed here
+  // Global interval-command config (raw JSON from the Settings table). Shared
+  // by every bot; parsed here. Optional — defaults to disabled.
+  intervalCommand?: unknown;
   reconnectPolicy?: ReconnectPolicy;
 }
 
@@ -72,6 +82,7 @@ export declare interface BotInstance {
 export class BotInstance extends EventEmitter {
   private meta: BotMetadata;
   private behaviorConfig: BehaviorConfig;
+  private intervalCommandConfig: IntervalCommandConfig;
   private log: Logger;
   private policy: ReconnectPolicy;
 
@@ -93,11 +104,13 @@ export class BotInstance extends EventEmitter {
   private wiggle: WiggleBehavior | null = null;
   private chatPing: ChatPingBehavior | null = null;
   private loginCommands: LoginCommandsRunner | null = null;
+  private intervalCommand: IntervalCommandBehavior | null = null;
 
   constructor(opts: BotInstanceOptions) {
     super();
     this.meta = opts.meta;
     this.behaviorConfig = parseBehaviorConfig(opts.behaviors);
+    this.intervalCommandConfig = parseIntervalCommandConfig(opts.intervalCommand);
     this.policy = opts.reconnectPolicy ?? defaultReconnectPolicy;
     this.log = rootLogger.child({
       accountId: this.meta.id,
@@ -163,6 +176,25 @@ export class BotInstance extends EventEmitter {
     if (this.state === 'connected' && this.bot) {
       this.teardownBehaviors();
       this.startBehaviors(this.bot);
+    }
+  }
+
+  /**
+   * Apply a new GLOBAL interval-command config without dropping the
+   * connection. Pushed by the AccountManager when the Settings row changes,
+   * so a single edit retunes every running bot live.
+   */
+  updateIntervalCommand(rawIntervalCommand: unknown): void {
+    this.intervalCommandConfig = parseIntervalCommandConfig(rawIntervalCommand);
+    if (this.state === 'connected' && this.bot) {
+      this.intervalCommand?.stop();
+      this.intervalCommand = new IntervalCommandBehavior(
+        this.bot,
+        this.intervalCommandConfig,
+        this.templateContext(),
+        this.log,
+      );
+      this.intervalCommand.start();
     }
   }
 
@@ -407,12 +439,16 @@ export class BotInstance extends EventEmitter {
     }, delay);
   }
 
-  private startBehaviors(bot: Bot): void {
-    const ctx: TemplateContext = {
+  private templateContext(): TemplateContext {
+    return {
       ordinal: this.meta.ordinal,
       username: this.meta.username,
       label: this.meta.label,
     };
+  }
+
+  private startBehaviors(bot: Bot): void {
+    const ctx = this.templateContext();
 
     this.loginCommands = new LoginCommandsRunner(
       bot,
@@ -427,15 +463,26 @@ export class BotInstance extends EventEmitter {
 
     this.chatPing = new ChatPingBehavior(bot, this.behaviorConfig.chatPing, ctx, this.log);
     this.chatPing.start();
+
+    // Global interval-command — shared config, per-bot template context.
+    this.intervalCommand = new IntervalCommandBehavior(
+      bot,
+      this.intervalCommandConfig,
+      ctx,
+      this.log,
+    );
+    this.intervalCommand.start();
   }
 
   private teardownBehaviors(): void {
     this.loginCommands?.cancel();
     this.wiggle?.stop();
     this.chatPing?.stop();
+    this.intervalCommand?.stop();
     this.loginCommands = null;
     this.wiggle = null;
     this.chatPing = null;
+    this.intervalCommand = null;
   }
 
   private setState(next: BotState): void {

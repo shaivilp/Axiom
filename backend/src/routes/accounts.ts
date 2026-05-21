@@ -73,6 +73,27 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
+// POST /accounts/start-all — start every account (dashboard "Start all").
+// Declared before the /:id routes so "start-all" isn't parsed as an :id.
+router.post('/start-all', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const accounts = await accountManager.startAll();
+    res.json({ accounts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /accounts/stop-all — stop every account (dashboard "Stop all").
+router.post('/stop-all', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const accounts = await accountManager.stopAll();
+    res.json({ accounts });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /accounts/:id — summary + full behavior config (for the detail view,
 // so the behaviors form can be seeded with the account's actual saved values
 // rather than defaults).

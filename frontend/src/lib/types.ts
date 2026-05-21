@@ -67,12 +67,20 @@ export interface BehaviorConfig {
   loginCommands: LoginCommand[];
 }
 
+/** Global repeating-command config (Settings table), applied to all bots. */
+export interface IntervalCommandConfig {
+  enabled: boolean;
+  intervalMs: number;
+  commands: string[];
+}
+
 export interface SettingsRow {
   id: string;
   defaultServerHost: string | null;
   defaultServerPort: number | null;
   defaultVersion: string | null;
   defaultBehaviors: BehaviorConfig | Record<string, never>;
+  intervalCommand: IntervalCommandConfig | Record<string, never>;
   updatedAt: string;
 }
 
