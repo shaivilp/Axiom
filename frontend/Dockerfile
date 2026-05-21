@@ -1,38 +1,18 @@
-# syntax=docker/dockerfile:1.7
+# Bun-based frontend build → static files served by nginx.
 
-# ---------- builder ----------
-FROM node:22-alpine AS builder
-
-RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
-WORKDIR /repo
-
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
-COPY frontend/package.json frontend/
-# backend manifest is referenced by the workspace lockfile resolver
-COPY backend/package.json backend/
-COPY backend/prisma backend/prisma
-RUN pnpm install --filter frontend --frozen-lockfile
-# Some host filesystems drop the execute bit on bin files that pnpm
-# materializes from its content-addressable store. Recursively chmod
-# every `.bin` and `bin` directory under any node_modules so the
-# shell shims AND their symlink targets are runnable. (Two separate
-# finds — using -o with parens in a Dockerfile RUN trips on shell
-# escaping; this avoids the whole issue.)
-RUN find /repo -type d -name ".bin" -path "*node_modules*" -exec chmod -R a+rx {} + ; \
-    find /repo -type d -name "bin"  -path "*node_modules*" -exec chmod -R a+rx {} + ; \
-    true
-
-COPY frontend ./frontend
-WORKDIR /repo/frontend
-RUN pnpm build
+FROM oven/bun:1-alpine AS builder
+WORKDIR /app
+COPY frontend/package.json ./
+RUN bun install
+COPY frontend/ ./
+# `bun run build` runs `tsc -b && vite build` (see package.json). Bun
+# resolves the binaries from node_modules cleanly.
+RUN bun run build
 
 # ---------- runtime ----------
 FROM nginx:1.27-alpine AS runtime
-
-COPY --from=builder /repo/frontend/dist /usr/share/nginx/html
+COPY --from=builder /app/dist /usr/share/nginx/html
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
-
 EXPOSE 80
 HEALTHCHECK --interval=15s --timeout=3s CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1
-
 CMD ["nginx", "-g", "daemon off;"]

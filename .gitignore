@@ -31,3 +31,6 @@ coverage/
 
 # Vite
 .vite/
+# Spurious tsc -b emit from the composite vite.config project
+frontend/vite.config.js
+frontend/vite.config.d.ts
