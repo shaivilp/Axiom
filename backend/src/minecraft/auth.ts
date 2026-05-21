@@ -163,9 +163,16 @@ export async function startDeviceCodeFlow(
     identifierHint,
     cacheDirFor(accountId),
     {
+      // MUST match what minecraft-protocol/mineflayer uses internally
+      // (see minecraft-protocol/src/client/microsoftAuth.js validateOptions):
+      // the Nintendo Switch title + Nintendo device type is the combo
+      // Microsoft permits for third-party device-code auth. The MinecraftJava
+      // title + Win32 gets 403'd at the token exchange. Matching mineflayer's
+      // config here also ensures the token cache we write is the one
+      // mineflayer reads when it connects (the cache is scoped by title).
       flow: 'live',
-      authTitle: Titles.MinecraftJava,
-      deviceType: 'Win32',
+      authTitle: Titles.MinecraftNintendoSwitch,
+      deviceType: 'Nintendo',
     },
     (data) => {
       // Microsoft's device authorization response is snake_case on the wire.
