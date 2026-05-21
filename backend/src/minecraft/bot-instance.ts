@@ -243,9 +243,18 @@ export class BotInstance extends EventEmitter {
 
     this.setState('connecting');
 
+    // For Microsoft auth, the `username` passed to mineflayer is only used as
+    // the prismarine-auth cache key (the real profile name comes from the
+    // token). It MUST match the identifier our device-code flow cached under,
+    // so we use the stable account UUID on both sides — the display username
+    // (meta.username) can change to the MS profile name without breaking the
+    // cache lookup. For offline auth, username is the literal player name.
+    const authUsername =
+      this.meta.authType === 'microsoft' ? this.meta.id : this.meta.username;
+
     // createBot is synchronous; failures show up as 'error' / 'end' events.
     const bot = createBot({
-      username: this.meta.username,
+      username: authUsername,
       host: this.meta.serverHost,
       port: this.meta.serverPort,
       version: this.meta.version,

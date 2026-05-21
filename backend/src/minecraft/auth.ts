@@ -139,10 +139,7 @@ async function withSyncLock<T>(accountId: string, fn: () => Promise<T>): Promise
  * immediately; the actual token fetch continues in the background. Caller
  * polls `getFlowState(accountId)` for completion.
  */
-export async function startDeviceCodeFlow(
-  accountId: string,
-  identifierHint: string,
-): Promise<DeviceCodeStartResult> {
+export async function startDeviceCodeFlow(accountId: string): Promise<DeviceCodeStartResult> {
   // Wipe any previous flow's disk cache so we don't accidentally reuse a
   // half-completed auth against the wrong identifier.
   await rm(cacheDirFor(accountId), { recursive: true, force: true });
@@ -160,7 +157,11 @@ export async function startDeviceCodeFlow(
   activeFlows.set(accountId, state);
 
   const flow = new Authflow(
-    identifierHint,
+    // Stable cache key: the account UUID. mineflayer connects with this same
+    // identifier (see bot-instance.ts authUsername), so the token we cache
+    // here is the one it reads — independent of the display username, which
+    // changes to the MS profile name after auth.
+    accountId,
     cacheDirFor(accountId),
     {
       // MUST match what minecraft-protocol/mineflayer uses internally

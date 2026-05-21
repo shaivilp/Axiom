@@ -27,7 +27,7 @@ router.post('/:id/auth/start', async (req: Request, res: Response, next: NextFun
         400,
       );
     }
-    const code = await startDeviceCodeFlow(id, row.username);
+    const code = await startDeviceCodeFlow(id);
     res.json({ flow: code });
   } catch (err) {
     next(err);
