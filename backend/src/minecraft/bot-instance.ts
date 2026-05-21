@@ -149,6 +149,11 @@ export class BotInstance extends EventEmitter {
     return Date.now() - this.connectStartTime.getTime();
   }
 
+  /** The current parsed behavior config (wiggle, chat-ping, login commands). */
+  getBehaviors(): BehaviorConfig {
+    return this.behaviorConfig;
+  }
+
   /**
    * Apply a new behavior config without dropping the current connection.
    * Existing timers are torn down and recreated for the new config.

@@ -45,24 +45,32 @@ export function AccountDetail() {
   useEffect(() => {
     if (!id) return;
     const unsub = subscribeAccount(id);
+    // Fetch the account's actual saved behavior config (including login
+    // commands) and seed the form with it. The WS summary doesn't carry
+    // behaviors, so this is the only place we load the real values.
+    void api
+      .getAccount(id)
+      .then(({ behaviors: saved }) => {
+        if (!behaviorsDirty.current) {
+          setBehaviors(saved ?? defaultBehaviorConfig);
+        }
+      })
+      .catch(() => {
+        if (!behaviorsDirty.current) setBehaviors(defaultBehaviorConfig);
+      });
     return unsub;
   }, [id, subscribeAccount]);
 
-  // Initialize form fields from the account once it shows up in the store.
-  // Subsequent remote updates ONLY overwrite the form if the user hasn't
-  // started editing — otherwise we'd silently nuke their typed changes.
-  // H11 fix from the security review.
+  // Initialize connection form fields from the account once it shows up in
+  // the store. Subsequent remote updates ONLY overwrite the form if the user
+  // hasn't started editing — otherwise we'd silently nuke their typed
+  // changes. H11 fix from the security review.
   useEffect(() => {
     if (!account) return;
-    if (form === null) {
-      setForm(toConnectionForm(account));
-    } else if (!formDirty.current) {
+    if (form === null || !formDirty.current) {
       setForm(toConnectionForm(account));
     }
-    if (behaviors === null) {
-      setBehaviors(parseBehaviorsFromRow(account) ?? defaultBehaviorConfig);
-    }
-  }, [account, form, behaviors]);
+  }, [account, form]);
 
   if (!account || !form) {
     return (
@@ -297,13 +305,4 @@ export function AccountDetail() {
       </main>
     </div>
   );
-}
-
-function parseBehaviorsFromRow(_a: AccountSummary): BehaviorConfig | null {
-  // AccountSummary doesn't carry behaviors today — they're saved through
-  // updateAccount, then re-fetched if the form needs them. For now, return
-  // null so the form falls back to defaultBehaviorConfig until the user
-  // explicitly fetches them. Wiring behaviors into the summary payload is
-  // a separate enhancement.
-  return null;
 }

@@ -5,6 +5,7 @@ import { logger } from '../logger.js';
 import { AppError, ErrorCodes } from '../types.js';
 import { deleteAuthCache, hasPersistedTokens } from './auth.js';
 import { BotInstance, type BotMetadata } from './bot-instance.js';
+import type { BehaviorConfig } from './behaviors/schema.js';
 import type { AccountSummary, BotLifecycleEvent, ChatEvent } from './events.js';
 
 /**
@@ -102,6 +103,12 @@ export class AccountManager extends EventEmitter {
   getSummary(id: string): AccountSummary | null {
     const bot = this.bots.get(id);
     return bot ? this.summarize(bot) : null;
+  }
+
+  /** The full parsed behavior config for an account (for the detail view). */
+  getBehaviors(id: string): BehaviorConfig | null {
+    const bot = this.bots.get(id);
+    return bot ? bot.getBehaviors() : null;
   }
 
   private summarize(bot: BotInstance): AccountSummary {

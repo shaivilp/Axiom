@@ -73,14 +73,17 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-// GET /accounts/:id
+// GET /accounts/:id — summary + full behavior config (for the detail view,
+// so the behaviors form can be seeded with the account's actual saved values
+// rather than defaults).
 router.get('/:id', withAccountId, (req: Request, res: Response, next: NextFunction) => {
   try {
     const summary = accountManager.getSummary(req.accountId!);
     if (!summary) {
       throw new AppError(ErrorCodes.ACCOUNT_NOT_FOUND, 'Account not found', 404);
     }
-    res.json({ account: summary });
+    const behaviors = accountManager.getBehaviors(req.accountId!);
+    res.json({ account: summary, behaviors });
   } catch (err) {
     next(err);
   }

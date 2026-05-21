@@ -84,7 +84,8 @@ export const api = {
   whoami: () => request<{ authenticated: boolean }>('/whoami'),
 
   listAccounts: () => request<{ accounts: AccountSummary[] }>('/accounts'),
-  getAccount: (id: string) => request<{ account: AccountSummary }>(`/accounts/${id}`),
+  getAccount: (id: string) =>
+    request<{ account: AccountSummary; behaviors: BehaviorConfig | null }>(`/accounts/${id}`),
   createAccount: (input: {
     label: string;
     username: string;
