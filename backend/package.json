@@ -30,7 +30,7 @@
     "pino": "9.6.0",
     "pino-http": "10.4.0",
     "prisma": "6.1.0",
-    "prismarine-auth": "2.7.0",
+    "prismarine-auth": "3.1.1",
     "ws": "8.18.0",
     "zod": "3.24.1"
   },
