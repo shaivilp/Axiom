@@ -32,12 +32,17 @@ export function Settings() {
 
   const onSave = async () => {
     try {
+      const cleanedBehaviors = {
+        ...behaviors,
+        loginCommands: behaviors.loginCommands.filter((c) => c.command.trim() !== ''),
+      };
       await api.updateSettings({
         defaultServerHost: host || null,
         defaultServerPort: port,
         defaultVersion: version,
-        defaultBehaviors: behaviors,
+        defaultBehaviors: cleanedBehaviors,
       });
+      setBehaviors(cleanedBehaviors);
       toast.success('Settings saved');
     } catch (err) {
       const msg = err instanceof ApiClientError ? err.message : 'save failed';

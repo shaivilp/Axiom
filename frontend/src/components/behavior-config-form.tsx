@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -182,10 +181,12 @@ function LoginCommandsSection({
   update: (p: Partial<BehaviorConfig>) => void;
   disabled?: boolean;
 }) {
-  const [newCmd, setNewCmd] = useState('');
-  const [newDelay, setNewDelay] = useState(1000);
-
   const setCmds = (cmds: LoginCommand[]) => update({ loginCommands: cmds });
+
+  // Every visible row is a real entry in the saved list — there's no
+  // separate "uncommitted" input box to forget about. "Add command" appends
+  // an editable row; blank rows are stripped when the form is saved.
+  const addRow = () => setCmds([...value.loginCommands, { command: '', delayMs: 1000 }]);
 
   return (
     <div className="space-y-3">
@@ -193,14 +194,20 @@ function LoginCommandsSection({
         <Label className="text-sm font-medium">Login commands</Label>
         <p className="text-muted-foreground text-xs">
           Sent in order after spawn. Use <code>{'{{ordinal}}'}</code> for per-bot warps:{' '}
-          <code>/f warp cac{'{{ordinal}}'}</code>.
+          <code>/f warp cac{'{{ordinal}}'}</code>. Delay (ms) is the wait before each command.
         </p>
       </div>
       <div className="space-y-1.5">
+        {value.loginCommands.length === 0 && (
+          <p className="text-muted-foreground text-xs italic">
+            No login commands. Add one below — e.g. <code>/login mypassword</code>.
+          </p>
+        )}
         {value.loginCommands.map((c, i) => (
           <div key={i} className="flex items-center gap-2">
             <Input
               value={c.command}
+              placeholder="/login mypassword"
               onChange={(e) => {
                 const next = [...value.loginCommands];
                 next[i] = { ...c, command: e.target.value };
@@ -227,43 +234,16 @@ function LoginCommandsSection({
               variant="ghost"
               onClick={() => setCmds(value.loginCommands.filter((_, j) => j !== i))}
               disabled={disabled}
+              aria-label="Remove command"
             >
               <X className="size-4" />
             </Button>
           </div>
         ))}
       </div>
-      <div className="flex items-center gap-2">
-        <Input
-          placeholder="/login mypassword"
-          value={newCmd}
-          onChange={(e) => setNewCmd(e.target.value)}
-          disabled={disabled}
-          className="flex-1 font-mono text-xs"
-        />
-        <Input
-          type="number"
-          value={newDelay}
-          onChange={(e) => setNewDelay(Number(e.target.value))}
-          disabled={disabled}
-          className="w-24 text-xs"
-          min={0}
-          max={60000}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            if (!newCmd.trim()) return;
-            setCmds([...value.loginCommands, { command: newCmd, delayMs: newDelay }]);
-            setNewCmd('');
-            setNewDelay(1000);
-          }}
-          disabled={disabled}
-        >
-          <Plus className="size-4" />
-        </Button>
-      </div>
+      <Button size="sm" variant="outline" onClick={addRow} disabled={disabled} className="w-full">
+        <Plus className="size-4" /> Add command
+      </Button>
     </div>
   );
 }

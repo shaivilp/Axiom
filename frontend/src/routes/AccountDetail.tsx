@@ -110,7 +110,14 @@ export function AccountDetail() {
   const onSaveBehaviors = async () => {
     if (!behaviors) return;
     try {
-      await api.updateAccount(account.id, { behaviors });
+      // Drop blank login-command rows (e.g. an empty row the user added but
+      // didn't fill in) so they don't trip the backend's min-length check.
+      const cleaned = {
+        ...behaviors,
+        loginCommands: behaviors.loginCommands.filter((c) => c.command.trim() !== ''),
+      };
+      await api.updateAccount(account.id, { behaviors: cleaned });
+      setBehaviors(cleaned);
       toast.success('Behaviors saved');
       behaviorsDirty.current = false;
     } catch (err) {
