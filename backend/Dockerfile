@@ -30,14 +30,15 @@ COPY backend/src ./src
 RUN mkdir -p /data/.msauth-cache && chown -R bun:bun /data /app
 ENV MSAUTH_CACHE_DIR=/data/.msauth-cache \
     NODE_ENV=production \
+    PORT=3005 \
     HOME=/tmp \
     BUN_INSTALL_CACHE_DIR=/tmp/.bun-cache
 
 USER bun
-EXPOSE 3000
+EXPOSE 3005
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:3000/healthz || exit 1
+  CMD wget -qO- http://127.0.0.1:3005/healthz || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--"]
 # Apply pending migrations, then run the TypeScript entry point directly

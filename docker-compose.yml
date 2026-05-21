@@ -49,11 +49,11 @@ services:
     environment:
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      PORT: 3000
+      PORT: 3005
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?DASHBOARD_TOKEN required}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?TOKEN_ENCRYPTION_KEY required}
       DATABASE_URL: postgresql://${POSTGRES_USER:-afkbot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-afkbot}
-      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:8080}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:5005}
       TRUST_PROXY: ${TRUST_PROXY:-loopback}
     read_only: true
     tmpfs:
@@ -83,7 +83,7 @@ services:
       - SETUID
       - NET_BIND_SERVICE
     ports:
-      - "${HOST_PORT:-8080}:80"
+      - "${HOST_PORT:-5005}:80"
     networks: [afkbot]
 
 networks:

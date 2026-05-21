@@ -58,7 +58,7 @@ openssl rand -hex 32  # → paste as TOKEN_ENCRYPTION_KEY
 docker compose up -d
 ```
 
-Open `http://localhost:8080`, enter your `DASHBOARD_TOKEN`, and add your
+Open `http://localhost:5005`, enter your `DASHBOARD_TOKEN`, and add your
 first account.
 
 ---
@@ -100,7 +100,7 @@ bridge.
 ```
 ┌──────────┐       ┌──────────────┐       ┌──────────────┐
 │ browser  │──────▶│   frontend   │──────▶│    backend   │──┐
-│ :8080    │       │ nginx + Vite │       │ Express + WS │  │
+│ :5005    │       │ nginx + Vite │       │ Express + WS │  │
 └──────────┘       │ proxies /api │       │ AccountMgr   │  │
                    │ + /ws        │       │ N mineflayer │  │
                    └──────────────┘       └──────┬───────┘  │
@@ -114,7 +114,7 @@ bridge.
 
 **Stack**
 
-- Backend: Node 20 + TypeScript (strict), Express, `mineflayer`,
+- Backend: Bun + TypeScript (strict), Express, `mineflayer`,
   `prismarine-auth`, Prisma + Postgres, Pino, Zod, `ws`
 - Frontend: React 18 + Vite + TypeScript, Tailwind, shadcn/ui, Zustand,
   React Router
@@ -160,8 +160,8 @@ Axiom/
 | `TOKEN_ENCRYPTION_KEY` | yes | Exactly 64 hex chars (32 bytes). Used to AES-256-GCM-encrypt Microsoft refresh tokens at rest. **Rotating this means existing MS accounts must re-auth.** |
 | `POSTGRES_PASSWORD` | yes | Database password. |
 | `POSTGRES_DB` / `POSTGRES_USER` | no | Default `afkbot`. |
-| `ALLOWED_ORIGIN` | no | CORS origin. Default `http://localhost:8080`. |
-| `HOST_PORT` | no | Host port to publish the frontend on. Default `8080`. |
+| `ALLOWED_ORIGIN` | no | CORS origin. Default `http://localhost:5005`. |
+| `HOST_PORT` | no | Host port to publish the frontend on. Default `5005`. |
 | `LOG_LEVEL` | no | Pino level. Default `info`. |
 
 Generate the secrets:
@@ -201,8 +201,8 @@ docker compose build
 docker compose up -d
 ```
 
-Schema changes are applied automatically by `prisma db push` on backend
-startup.
+Schema changes are applied automatically by `prisma migrate deploy` on
+backend startup.
 
 ---
 
