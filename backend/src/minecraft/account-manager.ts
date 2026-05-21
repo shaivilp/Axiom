@@ -51,6 +51,10 @@ function rowToMeta(row: Account): BotMetadata {
 export class AccountManager extends EventEmitter {
   private bots = new Map<string, BotInstance>();
   private started = false;
+  // Cached raw global interval-command config (the JSON blob from the Settings
+  // row). Handed to every BotInstance at spawn so a freshly hydrated or newly
+  // created bot picks up the current global command without a DB round-trip.
+  private intervalCommandRaw: unknown = {};
 
   /**
    * Hydrate from the DB on boot. Each account with `desiredState=running`
@@ -61,6 +65,11 @@ export class AccountManager extends EventEmitter {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+
+    // Load the global interval-command before spawning bots so each one boots
+    // with the current config already in hand.
+    const settings = await prisma.settings.findFirst().catch(() => null);
+    if (settings) this.intervalCommandRaw = settings.intervalCommand;
 
     const rows = await prisma.account.findMany({ orderBy: { ordinal: 'asc' } });
     logger.info({ count: rows.length }, 'account-manager: hydrating from db');
@@ -111,6 +120,18 @@ export class AccountManager extends EventEmitter {
     return bot ? bot.getBehaviors() : null;
   }
 
+  /**
+   * Update the GLOBAL interval-command and push it live to every bot. The
+   * Settings route persists the blob; this caches it (for future spawns) and
+   * retunes all currently-running bots without dropping connections.
+   */
+  setIntervalCommand(raw: unknown): void {
+    this.intervalCommandRaw = raw ?? {};
+    for (const bot of this.bots.values()) {
+      bot.updateIntervalCommand(this.intervalCommandRaw);
+    }
+  }
+
   private summarize(bot: BotInstance): AccountSummary {
     const meta = bot.getMeta();
     return {
@@ -136,6 +157,7 @@ export class AccountManager extends EventEmitter {
     const bot = new BotInstance({
       meta: rowToMeta(row),
       behaviors: row.behaviors,
+      intervalCommand: this.intervalCommandRaw,
     });
 
     bot.on('state', () => {
@@ -272,6 +294,43 @@ export class AccountManager extends EventEmitter {
     bot.updateMeta(rowToMeta(row));
     await bot.stop();
     return this.summarize(bot);
+  }
+
+  /**
+   * Start every account (dashboard "Start all"). Microsoft accounts without a
+   * persisted token are skipped — starting one would infinite-loop on a stale
+   * device-code prompt (same guard as boot hydration). Returns all summaries.
+   */
+  async startAll(): Promise<AccountSummary[]> {
+    for (const [id, bot] of this.bots) {
+      if (bot.getMeta().authType === 'microsoft') {
+        const hasTokens = await hasPersistedTokens(id).catch(() => false);
+        if (!hasTokens) {
+          logger.warn({ accountId: id }, 'start-all: skipping MS account with no persisted tokens');
+          continue;
+        }
+      }
+      const row = await prisma.account.update({
+        where: { id },
+        data: { desiredState: 'running' },
+      });
+      bot.updateMeta(rowToMeta(row));
+      bot.start();
+    }
+    return this.listSummaries();
+  }
+
+  /** Stop every account (dashboard "Stop all"). Suppresses all reconnects. */
+  async stopAll(): Promise<AccountSummary[]> {
+    const ids = Array.from(this.bots.keys());
+    await Promise.all(
+      ids.map((id) =>
+        this.stopAccount(id).catch((err) => {
+          logger.warn({ err, id }, 'stop-all: stop failed');
+        }),
+      ),
+    );
+    return this.listSummaries();
   }
 
   /**

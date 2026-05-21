@@ -3,6 +3,7 @@ import type {
   BehaviorConfig,
   DeviceCodeFlow,
   DeviceFlowStatus,
+  IntervalCommandConfig,
   SettingsRow,
 } from './types';
 
@@ -121,6 +122,10 @@ export const api = {
     request<{ account: AccountSummary }>(`/accounts/${id}/start`, { method: 'POST' }),
   stopAccount: (id: string) =>
     request<{ account: AccountSummary }>(`/accounts/${id}/stop`, { method: 'POST' }),
+  startAllAccounts: () =>
+    request<{ accounts: AccountSummary[] }>('/accounts/start-all', { method: 'POST' }),
+  stopAllAccounts: () =>
+    request<{ accounts: AccountSummary[] }>('/accounts/stop-all', { method: 'POST' }),
   sendChat: (id: string, message: string) =>
     request<{ sent: boolean }>(`/accounts/${id}/chat`, {
       method: 'POST',
@@ -143,6 +148,7 @@ export const api = {
       defaultServerPort: number | null;
       defaultVersion: string | null;
       defaultBehaviors: BehaviorConfig;
+      intervalCommand: IntervalCommandConfig;
     }>,
   ) =>
     request<{ settings: SettingsRow }>('/settings', {

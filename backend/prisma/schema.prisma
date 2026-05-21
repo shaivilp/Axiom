@@ -90,6 +90,11 @@ model Settings {
   defaultServerPort Int?     @default(25565)
   defaultVersion    String?  @default("1.8.9")
   defaultBehaviors  Json     @default("{}")
+  // Global IntervalCommandConfig blob (validated by zod). A single repeating
+  // command (or rotating list) that every bot runs on a fixed interval —
+  // applied live to all running bots, not just new accounts. See
+  // src/minecraft/behaviors/schema.ts (intervalCommandConfigSchema).
+  intervalCommand   Json     @default("{}")
   updatedAt         DateTime @updatedAt
 
   @@map("settings")

@@ -8,9 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { BehaviorConfigForm } from '@/components/behavior-config-form';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { api, ApiClientError } from '@/lib/api';
-import { defaultBehaviorConfig } from '@/lib/behaviors';
-import type { BehaviorConfig, SettingsRow } from '@/lib/types';
+import { defaultBehaviorConfig, defaultIntervalCommandConfig } from '@/lib/behaviors';
+import type { BehaviorConfig, IntervalCommandConfig, SettingsRow } from '@/lib/types';
 
 export function Settings() {
   const [row, setRow] = useState<SettingsRow | null>(null);
@@ -18,6 +20,9 @@ export function Settings() {
   const [port, setPort] = useState(25565);
   const [version, setVersion] = useState('1.8.9');
   const [behaviors, setBehaviors] = useState<BehaviorConfig>(defaultBehaviorConfig);
+  const [intervalCommand, setIntervalCommand] = useState<IntervalCommandConfig>(
+    defaultIntervalCommandConfig,
+  );
 
   useEffect(() => {
     void api.getSettings().then(({ settings }) => {
@@ -27,6 +32,8 @@ export function Settings() {
       setVersion(settings.defaultVersion ?? '1.8.9');
       const stored = settings.defaultBehaviors as BehaviorConfig | Record<string, never>;
       if (stored && 'wiggle' in stored) setBehaviors(stored as BehaviorConfig);
+      const ic = settings.intervalCommand as IntervalCommandConfig | Record<string, never>;
+      if (ic && 'commands' in ic) setIntervalCommand(ic as IntervalCommandConfig);
     });
   }, []);
 
@@ -44,6 +51,24 @@ export function Settings() {
       });
       setBehaviors(cleanedBehaviors);
       toast.success('Settings saved');
+    } catch (err) {
+      const msg = err instanceof ApiClientError ? err.message : 'save failed';
+      toast.error('Save failed', { description: msg });
+    }
+  };
+
+  const onSaveIntervalCommand = async () => {
+    try {
+      // At least one non-blank command is required; fall back to the default
+      // so an empty list can't trip backend validation.
+      const cleanedCommands = intervalCommand.commands.map((c) => c.trim()).filter(Boolean);
+      const cleaned: IntervalCommandConfig = {
+        ...intervalCommand,
+        commands: cleanedCommands.length > 0 ? cleanedCommands : defaultIntervalCommandConfig.commands,
+      };
+      await api.updateSettings({ intervalCommand: cleaned });
+      setIntervalCommand(cleaned);
+      toast.success('Interval command saved — applied to all bots');
     } catch (err) {
       const msg = err instanceof ApiClientError ? err.message : 'save failed';
       toast.error('Save failed', { description: msg });
@@ -111,6 +136,66 @@ export function Settings() {
                   Last updated: {new Date(row.updatedAt).toLocaleString()}
                 </p>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Interval command (all bots)</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm font-medium">Enabled</Label>
+                  <p className="text-muted-foreground text-xs">
+                    Run a command on a fixed interval on <em>every</em> bot. Saving applies it to all
+                    running bots immediately.
+                  </p>
+                </div>
+                <Switch
+                  checked={intervalCommand.enabled}
+                  onCheckedChange={(c) => setIntervalCommand({ ...intervalCommand, enabled: c })}
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Interval (seconds)</Label>
+                <Input
+                  type="number"
+                  min={5}
+                  max={86400}
+                  value={Math.round(intervalCommand.intervalMs / 1000)}
+                  onChange={(e) =>
+                    setIntervalCommand({
+                      ...intervalCommand,
+                      intervalMs: Math.max(5, Number(e.target.value)) * 1000,
+                    })
+                  }
+                  disabled={!intervalCommand.enabled}
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Commands (one per line)</Label>
+                <Textarea
+                  rows={3}
+                  value={intervalCommand.commands.join('\n')}
+                  onChange={(e) =>
+                    setIntervalCommand({
+                      ...intervalCommand,
+                      commands: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean),
+                    })
+                  }
+                  placeholder="/help&#10;/f warp cac{{ordinal}}"
+                  disabled={!intervalCommand.enabled}
+                  className="font-mono text-xs"
+                />
+                <p className="text-muted-foreground mt-1 text-xs">
+                  Rotates through the list. Supports <code>{'{{ordinal}}'}</code>,{' '}
+                  <code>{'{{username}}'}</code>, <code>{'{{label}}'}</code>.
+                </p>
+              </div>
+              <Button onClick={onSaveIntervalCommand} className="w-full">
+                <Save className="size-4" /> Save interval command
+              </Button>
             </CardContent>
           </Card>
 

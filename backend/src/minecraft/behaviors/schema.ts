@@ -36,6 +36,22 @@ export const chatPingConfigSchema = z.object({
   messages: z.array(z.string().min(1).max(256)).min(1).default(['Still here.']),
 });
 
+/**
+ * Global "interval command" — a slash command (or rotating list of commands)
+ * re-sent on a FIXED interval by every bot. Unlike the per-account behaviors
+ * above, this lives once in the Settings table and is pushed live to all
+ * running bots. Each command supports the same {{ordinal}}/{{username}}/{{label}}
+ * template substitution, so `/f warp cac{{ordinal}}` works per-bot.
+ */
+export const intervalCommandConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  // 5s floor (don't let a typo hammer the server); 24h ceiling.
+  intervalMs: z.number().int().min(5_000).max(24 * 60 * 60_000).default(300_000),
+  // Commands rotate in order. Include the leading slash for slash commands;
+  // the bot does not add one. At least one entry.
+  commands: z.array(z.string().min(1).max(256)).min(1).default(['/help']),
+});
+
 export const loginCommandSchema = z.object({
   // Literal command string or one with {{ordinal}}/{{username}}/{{label}}.
   // Include the leading slash for slash commands; the bot does not add one.
@@ -59,6 +75,7 @@ export type WiggleConfig = z.infer<typeof wiggleConfigSchema>;
 export type ChatPingConfig = z.infer<typeof chatPingConfigSchema>;
 export type LoginCommand = z.infer<typeof loginCommandSchema>;
 export type BehaviorConfig = z.infer<typeof behaviorConfigSchema>;
+export type IntervalCommandConfig = z.infer<typeof intervalCommandConfigSchema>;
 
 export interface TemplateContext {
   ordinal: number;
@@ -95,4 +112,13 @@ export function parseBehaviorConfig(raw: unknown): BehaviorConfig {
   // `null` and `undefined` are valid — they mean "use defaults".
   if (raw == null) return behaviorConfigSchema.parse({});
   return behaviorConfigSchema.parse(raw);
+}
+
+/**
+ * Parse the global interval-command blob from the Settings table. Like
+ * parseBehaviorConfig, `null`/`undefined`/`{}` mean "use defaults" (disabled).
+ */
+export function parseIntervalCommandConfig(raw: unknown): IntervalCommandConfig {
+  if (raw == null) return intervalCommandConfigSchema.parse({});
+  return intervalCommandConfigSchema.parse(raw);
 }
