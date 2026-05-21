@@ -1,6 +1,6 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { URL } from 'node:url';
-import { WebSocket, WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { z } from 'zod';
 import { logger } from '../logger.js';
 import { verifyUpgradeAuth } from '../middleware/auth.js';
@@ -137,7 +137,7 @@ export function attachWebSocket(server: HttpServer): WebSocketServer {
       // Successful upgrade — reset this IP's failure budget so a legitimate
       // user reconnecting frequently doesn't get throttled.
       upgradeFailures.delete(ip);
-      wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
         wss.emit('connection', ws, req);
       });
     } catch (err) {
@@ -146,12 +146,12 @@ export function attachWebSocket(server: HttpServer): WebSocketServer {
     }
   });
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const ip = req.socket.remoteAddress;
     logger.info({ ip }, 'ws: client connected');
     getState(ws); // initialize state
 
-    ws.on('message', (raw) => {
+    ws.on('message', (raw: RawData) => {
       let parsed: WsInbound;
       try {
         const json = JSON.parse(raw.toString()) as unknown;
@@ -203,7 +203,7 @@ export function attachWebSocket(server: HttpServer): WebSocketServer {
       logger.debug({ ip }, 'ws: client disconnected');
     });
 
-    ws.on('error', (err) => {
+    ws.on('error', (err: Error) => {
       logger.debug({ err, ip }, 'ws: socket error');
     });
   });

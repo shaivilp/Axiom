@@ -14,6 +14,27 @@ const loginSchema = z.object({
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /**
+ * The session cookie is marked `Secure` only when the dashboard is actually
+ * served over HTTPS. We key off the scheme of ALLOWED_ORIGIN (the operator's
+ * declared dashboard URL) rather than NODE_ENV:
+ *
+ *   - http://...  (LAN / no TLS terminator)  → Secure=false, cookie works
+ *   - https://... (TLS terminator in front)  → Secure=true, hardened
+ *
+ * A `Secure` cookie is silently dropped by browsers over plain HTTP, which
+ * would break login on a typical self-hosted LAN deployment. This ties the
+ * flag to reality with a single source of truth.
+ */
+const cookieSecure = config.ALLOWED_ORIGIN.startsWith('https://');
+
+const baseCookieOptions = {
+  httpOnly: true,
+  secure: cookieSecure,
+  sameSite: 'strict' as const,
+  path: '/',
+};
+
+/**
  * POST /auth/login — body { token } — validates the dashboard token and
  * sets the HttpOnly session cookie. Replaces the prior localStorage flow.
  */
@@ -25,13 +46,7 @@ router.post('/login', (req: Request, res: Response, next: NextFunction) => {
       throw new AppError(ErrorCodes.INVALID_TOKEN, 'Invalid token', 401);
     }
     res.cookie(sessionCookieName, token, {
-      httpOnly: true,
-      // The frontend is served behind nginx; in production the user is
-      // expected to put an HTTPS terminator in front. We only mark `secure`
-      // in production builds to keep localhost dev (plain HTTP) working.
-      secure: config.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/',
+      ...baseCookieOptions,
       maxAge: SESSION_MAX_AGE_MS,
     });
     res.status(204).end();
@@ -42,15 +57,11 @@ router.post('/login', (req: Request, res: Response, next: NextFunction) => {
 
 /**
  * POST /auth/logout — clears the session cookie. No auth required; clearing
- * an already-invalid cookie is a no-op.
+ * an already-invalid cookie is a no-op. Cookie attributes must match the
+ * ones used at set time for the clear to take effect.
  */
 router.post('/logout', (_req: Request, res: Response) => {
-  res.clearCookie(sessionCookieName, {
-    httpOnly: true,
-    secure: config.NODE_ENV === 'production',
-    sameSite: 'strict',
-    path: '/',
-  });
+  res.clearCookie(sessionCookieName, baseCookieOptions);
   res.status(204).end();
 });
 
